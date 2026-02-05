@@ -1,0 +1,84 @@
+# Archivos y directorios a ignorar en Docker
+# Esto reduce el tamaño del contexto de construcción y mejora la seguridad
+
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Entornos virtuales
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# Archivos de entorno (contienen datos sensibles)
+.env
+.env.local
+.env.production
+
+# IDE y editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Base de datos local
+*.db
+*.sqlite3
+
+# Archivos temporales
+.tmp/
+temp/
+*.tmp
+
+# Documentación
+README.md
+docs/
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# MacOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
