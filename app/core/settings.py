@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # --- Google OAuth ---
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
+<<<<<<< HEAD
 
     # --- Meta Ws ---
     WHATSAPP_TOKEN: str = ""
@@ -50,6 +51,8 @@ class Settings(BaseSettings):
 
     # Zona Horaria
     APP_TIMEZONE: str = "UTC"
+=======
+>>>>>>> 527e4de9f5b4a6feec2737105b4ebde55f7fdcd9
     
     # --- Propiedades Calculadas (Helpers) ---
     @property

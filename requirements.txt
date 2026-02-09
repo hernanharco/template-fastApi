@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 alembic==1.18.3
+=======
+>>>>>>> 527e4de9f5b4a6feec2737105b4ebde55f7fdcd9
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==3.7.1
@@ -8,7 +11,10 @@ cffi==2.0.0
 charset-normalizer==3.4.4
 click==8.3.1
 cryptography==46.0.4
+<<<<<<< HEAD
 distro==1.9.0
+=======
+>>>>>>> 527e4de9f5b4a6feec2737105b4ebde55f7fdcd9
 dnspython==2.8.0
 ecdsa==0.19.1
 email-validator==2.3.0
@@ -18,6 +24,7 @@ google-auth-oauthlib==1.2.4
 greenlet==3.3.1
 gunicorn==25.0.1
 h11==0.16.0
+<<<<<<< HEAD
 httpcore==1.0.9
 httptools==0.7.1
 httpx==0.25.2
@@ -30,6 +37,12 @@ oauthlib==3.3.1
 openai==2.16.0
 packaging==26.0
 pluggy==1.6.0
+=======
+httptools==0.7.1
+idna==3.11
+oauthlib==3.3.1
+packaging==26.0
+>>>>>>> 527e4de9f5b4a6feec2737105b4ebde55f7fdcd9
 psycopg2-binary==2.9.9
 pyasn1==0.6.2
 pyasn1_modules==0.4.2
@@ -37,12 +50,18 @@ pycparser==3.0
 pydantic==2.12.5
 pydantic-settings==2.1.0
 pydantic_core==2.41.5
+<<<<<<< HEAD
 pytest==7.4.3
 pytest-asyncio==0.21.1
 python-dotenv==1.0.0
 python-jose==3.5.0
 python-multipart==0.0.22
 pytz==2025.2
+=======
+python-dotenv==1.0.0
+python-jose==3.5.0
+python-multipart==0.0.22
+>>>>>>> 527e4de9f5b4a6feec2737105b4ebde55f7fdcd9
 PyYAML==6.0.3
 requests==2.32.5
 requests-oauthlib==2.0.0
@@ -51,7 +70,10 @@ six==1.17.0
 sniffio==1.3.1
 SQLAlchemy==2.0.23
 starlette==0.50.0
+<<<<<<< HEAD
 tqdm==4.67.3
+=======
+>>>>>>> 527e4de9f5b4a6feec2737105b4ebde55f7fdcd9
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.6.3
