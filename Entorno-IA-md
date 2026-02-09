@@ -1,0 +1,526 @@
+
+# 1. Configuración de la "Llave Maestra"
+1. Crea un archivo llamado .env en la raíz de tu proyecto de backend (si no existe ya).
+
+2. Agrega tu llave de OpenAI (consíguela en platform.openai.com):
+
+```text
+OPENAI_API_KEY=tu_llave_aqui_xxx
+```
+
+## Ingresamos a la pagina web
+```web
+https://platform.openai.com/chat
+```
+1. Creamos una cuenta
+![alt text](image.png)
+
+Para que tu backend pueda "hablar" con la IA, necesitamos generar la API Key. Sigue estos pasos dentro de esa misma pantalla:
+
+    1. Generar tu API Key (La llave del cerebro)
+        1. En el menú de la izquierda, busca el icono que dice "API keys" (está debajo de Usage).
+
+        2. Haz clic en el botón "+ Create new secret key".
+
+        3. Ponle un nombre (ej: Agente_Citas_SaaS).
+
+        4. IMPORTANTE: Copia la llave y guárdala en un lugar seguro (o pégala de una vez en tu archivo .env). Una vez que cierres la ventana, no podrás verla de nuevo.
+_______
+    2. Configurar el Saldo (Créditos)
+    OpenAI funciona con un sistema de prepago para desarrolladores:
+
+        1. Ve a "Settings" -> "Billing".
+
+        2. Haz clic en "Add to balance". Con $5 USD es más que suficiente para miles de pruebas con el modelo gpt-4o-mini. Sin saldo, la API te devolverá un error 429 (Quota Reached).
+__________
+    3. Preparar el Backend para la IA
+    Ahora que tienes la llave, vamos a crear la estructura en tu proyecto de Python. Como eres junior, vamos a hacerlo de forma organizada para que no se mezcle con tu lógica actual.
+
+Crea una nueva carpeta en tu backend:
+
+```bash
+mkdir app/agents
+touch app/agents/booking_agent.py
+```
+
+Instala la librería necesaria en tu Linux:
+
+```bash
+pip install openai python-dotenv
+```
+_____
+# Preparando el BACKEND de la IA (Agente) - FastAPI
+
+## Paso 1: Configurar el entorno de "Cerebro"
+
+Primero, vamos a crear un archivo que será la base de tu agente.
+
+1. Crea el archivo: app/agents/booking_agent.py.
+
+2. Define el "Esquema de la Herramienta": Necesitamos decirle a OpenAI qué "herramientas" tiene disponibles. Vamos a mapear tu API de slots (la que vimos en las capturas con total_slots: 66) para que la IA sepa cómo usarla.
+
+## Paso 2: El código del Agente (Versión Pro Beta)
+
+Copia este código en app/agents/booking_agent.py. He incluido comentarios detallados para que entiendas cada línea:
+
+```python
+import os
+import json
+from openai import OpenAI
+from app.utils.availability import get_available_slots # Tu lógica real
+from app.db.session import SessionLocal # Para conectar a Neon
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Esta es la "descripción" que la IA lee para saber qué puede hacer
+import os
+import json
+from datetime import datetime
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# Importamos tu lógica de base de datos y disponibilidad
+from app.db.session import SessionLocal
+from app.utils.availability import get_available_slots
+
+# Cargamos variables de entorno para la API KEY
+load_dotenv()
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Definición de herramientas para la IA (Function Calling)
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_availability",
+            "description": "Consulta los horarios disponibles para un servicio en una fecha específica.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "service_id": {
+                        "type": "integer", 
+                        "description": "El ID del servicio (ej: 3 para corte de cabello)"
+                    },
+                    "target_date": {
+                        "type": "string", 
+                        "description": "La fecha deseada en formato YYYY-MM-DD (ej: 2026-02-05)"
+                    }
+                },
+                "required": ["service_id", "target_date"]
+            }
+        }
+    }
+]
+
+def run_booking_agent(user_prompt: str):
+    """
+    Orquestador que recibe el mensaje del usuario, decide si llamar a la DB 
+    y genera una respuesta en lenguaje natural.
+    """
+    messages = [
+        {
+            "role": "system", 
+            "content": "Eres un asistente amable de una peluquería. Si el usuario pregunta por disponibilidad, usa la herramienta get_availability."
+        },
+        {"role": "user", "content": user_prompt}
+    ]
+    
+    # 1. Primera llamada a la IA para analizar la intención
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        tools=TOOLS,
+        tool_choice="auto"
+    )
+    
+    response_message = response.choices[0].message
+    tool_calls = response_message.tool_calls
+
+    # 2. Si la IA decide que necesita consultar la base de datos (Neon)
+    if tool_calls:
+        messages.append(response_message)
+        
+        for tool_call in tool_calls:
+            # Extraemos los argumentos que la IA generó
+            function_args = json.loads(tool_call.function.arguments)
+            
+            # --- CORRECCIÓN DE TIPOS Y NOMBRES ---
+            raw_date = function_args.get("target_date")
+            s_id = function_args.get("service_id")
+            
+            # Convertimos el string a objeto datetime (requerido por availability.py)
+            date_obj = datetime.strptime(raw_date, "%Y-%m-%d")
+            
+            db = SessionLocal()
+            try:
+                # Llamada con los nombres exactos: target_date y service_id
+                slots_data = get_available_slots(
+                    db=db, 
+                    target_date=date_obj,  # Nombre exacto del parámetro en tu clase
+                    service_id=s_id
+                )
+                
+                # Añadimos el resultado de la función al historial para la IA
+                messages.append({
+                    "tool_call_id": tool_call.id,
+                    "role": "tool",
+                    "name": "get_availability",
+                    "content": json.dumps(slots_data, default=str), # default=str maneja fechas en el JSON
+                })
+                
+                # 3. Segunda llamada a la IA para que redacte la respuesta final
+                second_response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                )
+                return second_response.choices[0].message.content
+                
+            except Exception as e:
+                return f"Error al consultar la agenda: {str(e)}"
+            finally:
+                db.close()
+
+    # Si no hubo llamada a herramientas, devolver respuesta normal
+    return response_message.content
+```
+________
+## Paso 3: Tu primera prueba real
+Ahora, crea un archivo pequeño llamado test_agent.py en la raíz para probarlo sin prender todo el servidor:
+
+```python
+from app.agents.booking_agent import run_booking_agent
+from dotenv import load_dotenv
+
+load_dotenv()
+
+print("--- 🤖 Asistente de Citas Activo (Escribe 'salir' para terminar) ---")
+
+while True:
+    pregunta = input("\nUsuario: ")
+    if pregunta.lower() in ["salir", "exit", "quit"]:
+        print("Adiós!")
+        break
+    
+    respuesta = run_booking_agent(pregunta)
+    print(f"\nIA: {respuesta}")
+```
+____
+# PARA REALIZAR PRUEBAS
+## 1. Configura tu llave en el archivo .env
+Abre tu archivo .env (el que se ve en la raíz de tu proyecto en VS Code) y pega la llave que copiaste de OpenAI así:
+
+```Fragmento de código
+OPENAI_API_KEY=sk-proj-tu_llave_completa_aqui
+```
+    **Nota de Junior:** Asegúrate de que no haya espacios antes o después del signo = y que la llave empiece con sk-.
+_______
+
+## 2. Activa tu entorno virtual (venv)
+Como estamos en Linux y veo la carpeta venv en tu proyecto, abre la terminal en VS Code y asegúrate de que el entorno esté activo. Sabrás que está activo porque aparecerá (venv) al inicio de tu línea de comandos.
+
+Si no está activo, ejecuta:
+
+```Bash
+source venv/bin/activate
+```
+______________
+## 3. Ejecuta el agente desde la raíz
+Para que Python entienda las rutas como from app.agents..., debes ejecutar el script parado en la carpeta principal del proyecto (Backend-CoreAppointment).
+
+Ejecuta este comando en la terminal:
+
+```Bash
+python3 test_agent.py
+```
+__________
+🛠️ **¿Qué pasa si sale un error?**
+Como estamos configurando esto por primera vez, es normal que falten librerías o rutas. Aquí te digo cómo solucionarlos:
+
+- **Error:** ModuleNotFoundError: No module named 'openai'
+    - Solución: Ejecuta pip install openai python-dotenv.
+
+- **Error:** ModuleNotFoundError: No module named 'app'
+    - Solución: Esto pasa porque Python no sabe dónde está la carpeta app. Puedes arreglarlo momentáneamente ejecutando: export PYTHONPATH=$PYTHONPATH:. y luego vuelve a intentar el comando del paso 3.
+
+- **Error:** AuthenticationError
+    Solución: Revisa que la API Key en tu .env sea la correcta y que hayas guardado el archivo.
+
+Una última validación antes de arrancar
+Asegúrate de que en app/agents/booking_agent.py la función get_available_slots esté importada correctamente desde donde la tengas (probablemente app.utils.availability).
+________
+# PREPARAR FASTAPI PARA WHATSAPP
+
+Como ya tenemos el "cerebro" (el agente) funcionando en la terminal, ahora necesitamos exponerlo a internet para que Meta (WhatsApp) pueda enviarle mensajes. Para esto, vamos a crear un Webhook en tu backend de FastAPI.
+
+## 1. ¿Qué es un Webhook?
+Es básicamente una URL de tu API que "escucha". Cuando alguien te escribe al WhatsApp, Meta enviará un paquete de datos (JSON) a esa URL.
+
+## 2. Instalación de Dependencias
+Para manejar la comunicación con WhatsApp de forma profesional, vamos a necesitar httpx para enviar respuestas de vuelta a Meta:
+
+```Bash
+pip install httpx
+```
+## 3. Crear el Router de IA
+Siguiendo tu estructura modular de "Menos infraestructura, más valor", vamos a crear un nuevo archivo para los endpoints de la IA.
+
+Crea el archivo: app/api/v1/endpoints/ai_booking.py
+
+## 4. Código Base del Webhook
+Copia esto en app/api/v1/endpoints/ai_booking.py. Este código incluye la verificación que Meta pide para activar el servicio:
+
+```Python
+from fastapi import APIRouter, Request, Response, Query
+from app.agents.booking_agent import run_booking_agent
+import httpx
+import os
+
+router = APIRouter()
+
+# TOKEN DE VERIFICACIÓN (Tú inventas uno para configurar en Meta)
+VERIFY_TOKEN = "mi_token_secreto_123"
+
+@router.get("/whatsapp")
+async def verify_whatsapp(
+    mode: str = Query(None, alias="hub.mode"),
+    token: str = Query(None, alias="hub.verify_token"),
+    challenge: str = Query(None, alias="hub.challenge")
+):
+    """
+    Este endpoint es solo para que Meta verifique que tu servidor existe.
+    """
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return Response(content=challenge, media_type="text/plain")
+    return Response(content="Error de verificación", status_code=403)
+
+@router.post("/whatsapp")
+async def handle_whatsapp_message(request: Request):
+    """
+    Aquí es donde llegan los mensajes reales de los clientes.
+    """
+    data = await request.json()
+    
+    # Extraemos el mensaje y el número del remitente
+    try:
+        entry = data['entry'][0]['changes'][0]['value']
+        if 'messages' in entry:
+            message = entry['messages'][0]
+            phone_number = message['from']
+            user_text = message['text']['body']
+            
+            # PROCESAMOS CON TU AGENTE QUE YA FUNCIONA
+            ai_response = run_booking_agent(user_text)
+            
+            # TODO: Aquí enviaremos la respuesta de vuelta a WhatsApp usando httpx
+            print(f"Mensaje de {phone_number}: {user_text}")
+            print(f"Respuesta IA: {ai_response}")
+            
+    except Exception as e:
+        print(f"Error procesando WhatsApp: {e}")
+        
+    return {"status": "success"}
+``` 
+_______
+# COLOCAMOS A FUNCIONAR NGROK
+Como tu servidor de FastAPI normalmente corre en el puerto 8000 (o el que hayas configurado en tu main.py), el comando para que ngrok cree el túnel es el siguiente:
+
+## 1. El Comando para arrancar
+Abre una nueva terminal (no cierres la que tiene el venv) y ejecuta:
+
+```Bash
+ngrok http 8000
+```
+
+Si por alguna razón configuraste tu servidor en otro puerto (como el 9002 que vi en tus capturas de CORS), cambia el 8000 por ese número.
+
+## 2. Qué buscar en la pantalla de ngrok
+Una vez que lo ejecutes, verás una pantalla negra con varios datos. Lo que nos interesa es la línea que dice Forwarding:
+
+Verás algo como: Forwarding https://a1b2-c3d4.ngrok-free.app -> http://localhost:8000
+
+Copia esa URL que empieza con https. Esa es la que pegaremos en el panel de Meta (WhatsApp) más adelante.
+
+## 3. Preparar FastAPI para recibir el tráfico
+Para que esto funcione, asegúrate de que tu servidor de FastAPI esté encendido en la otra terminal:
+
+```Bash
+# En la terminal con el venv activo
+python -m uvicorn app.main:app --reload
+```
+
+## 4. Prueba de fuego 🔥
+Antes de ir a Meta, podemos probar si el túnel funciona. Abre el navegador y pega tu URL de ngrok sumándole la ruta que creamos hace un momento:
+```URL
+https://tu-url-de-ngrok.app/api/v1/ai_booking/whatsapp
+```
+
+Si te sale un mensaje que dice "Error de verificación", ¡ES UNA BUENA NOTICIA! Significa que el mensaje llegó hasta tu código de Python (y como no le pasaste los tokens de Meta, el código respondió con el error que programamos).
+__________
+# PREPARACION DE LA APP EN META (WHATSAPP)
+
+Hasta aqui llevariamos un error que seria
+INFO:     83.52.6.95:0 - "GET /api/v1/ai_booking/whatsapp HTTP/1.1" 403 Forbidden
+
+Porque 
+
+Sigue este paso a paso detallado para configurar el Webhook:
+
+## 1. Preparación en tu Código
+Asegúrate de que en tu archivo app/api/v1/endpoints/ai_booking.py el token sea exactamente este (o el que tú prefieras, pero debe coincidir):
+
+```Python
+VERIFY_TOKEN = "mi_token_secreto_123"
+```
+Y que tu servidor de FastAPI y ngrok estén corriendo.
+
+## 2. Entrar al Panel de Meta
+Ve a [developers.facebook.com](https://developers.facebook.com/) y entra en "My Apps".
+
+### 1 Crear la APP en Meta
+    
+    1. Haz clic en el botón verde "Crear app".
+
+    2. Te preguntará qué quieres que haga tu app. Selecciona la opción "Otros" (normalmente aparece al final) y dale a "Siguiente".
+
+    3. En la siguiente pantalla, elige el tipo de app "Empresa" (Business). Esto es muy importante porque solo este tipo permite usar la API de WhatsApp. Dale a "Siguiente".
+
+    4. Detalles de la app:
+
+        - Nombre de la app: Ponle algo como SaaS_Citas_IA.
+
+        - Correo electrónico de contacto: El tuyo está bien.
+
+        - Cuenta comercial: Si no tienes una, puedes dejarlo en blanco por ahora, Meta te permitirá crear una de prueba.
+
+![alt text](image-2.png)
+
+![alt text](image-3.png)
+
+En esta parte lo mejor Crear un portfolio comercial nuevo
+![alt text](image-4.png)
+
+![alt text](image-5.png)
+
+![alt text](image-6.png)  
+
+### Panel de Meta
+![alt text](image-7.png)
+
+    1. Dónde está el botón de WhatsApp
+       En la pantalla que tienes abierta, mira el menú de la izquierda (la columna gris oscura):
+
+        - Busca donde dice "Casos de uso" (debajo de "Acciones requeridas").
+
+        - Haz clic ahí. Debería aparecerte una lista de los casos que configuramos.
+
+        - Busca el que dice "WhatsApp" y haz clic en el botón que dice "Configurar" o "Personalizar".
+____________
+
+2. Qué buscar una vez dentro
+Sabrás que estás en el lugar correcto cuando veas un menú que diga "WhatsApp Cloud API" y opciones como:
+
+- Configuración de la API (Donde verás tu número de prueba).
+
+Si es la primera que se ingresa dira que se dara un numero de prueba y estara el boton de Aceptar 
+
+mostrar el numero e informacion de codigo 
+
+- Configuración (Donde pegaremos la URL de ngrok).
+![alt text](image-8.png)
+1. Rellenar los campos del Webhook
+En esa pantalla que tienes abierta, rellena los dos cuadros blancos que ves:
+
+- URL de devolución de llamada: Pega tu URL de ngrok que vimos en tu terminal de VS Code: https://1303-83-57-6-95.ngrok-free.app/api/v1/ai_booking/whatsapp
+
+- Token de verificación: Escribe exactamente: mi_token_secreto_123
+
+- Haz clic en el botón azul "Verificar y guardar".
+
+    💡 Nota de Junior: En cuanto le des al botón, mira tu terminal de VS Code. Deberías ver pasar una línea que dice GET /api/v1/ai_booking/whatsapp 200. Si sale 200, es que Facebook ya "saludó" a tu servidor y se llevan bien.
+
+![alt text](image-9.png)
+
+Presionamos donde Empezar a usar la API el boton azul
+
+1. Extrae tus credenciales
+En la imagen que enviaste, busca y copia estos dos datos:
+
+    - Identificador de número de teléfono: Es el número que aparece debajo de "De Número de prueba". Es algo como 954821033380789.
+
+    - Token de acceso: Haz clic en el botón azul que dice "Generar token de acceso" arriba del todo. Te dará un código larguísimo. Cópialo inmediatamente porque es temporal.
+
+__________
+
+2. Actualiza tu código en app/api/v1/endpoints/ai_booking.py
+Ahora vamos a hacer que tu servidor no solo reciba mensajes, sino que responda usando la IA. Reemplaza el contenido de ese archivo con este código profesional:
+
+```Python
+from fastapi import APIRouter, Request, Response, Query
+from app.agents.booking_agent import run_booking_agent
+import httpx
+import os
+
+router = APIRouter()
+
+# --- CONFIGURACIÓN DE META ---
+VERIFY_TOKEN = "mi_token_secreto_123"
+WHATSAPP_TOKEN = "PEGA_AQUI_TU_TOKEN_LARGO"
+PHONE_NUMBER_ID = "PEGA_AQUI_TU_PHONE_NUMBER_ID"
+WHATSAPP_URL = f"https://graph.facebook.com/v22.0/{PHONE_NUMBER_ID}/messages"
+
+@router.get("/whatsapp")
+async def verify_whatsapp(
+    mode: str = Query(None, alias="hub.mode"),
+    token: str = Query(None, alias="hub.verify_token"),
+    challenge: str = Query(None, alias="hub.challenge")
+):
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return Response(content=challenge, media_type="text/plain")
+    return Response(content="Error de verificación", status_code=403)
+
+@router.post("/whatsapp")
+async def handle_whatsapp_message(request: Request):
+    data = await request.json()
+    
+    try:
+        # Extraemos los datos del mensaje entrante
+        entry = data['entry'][0]['changes'][0]['value']
+        if 'messages' in entry:
+            message = entry['messages'][0]
+            user_phone = message['from']
+            user_text = message['text']['body']
+            
+            # 1. Procesamos con tu Agente IA (el que ya consulta Neon)
+            ai_response = run_booking_agent(user_text)
+            
+            # 2. Enviamos la respuesta de vuelta al celular del cliente
+            async with httpx.AsyncClient() as client:
+                payload = {
+                    "messaging_product": "whatsapp",
+                    "to": user_phone,
+                    "type": "text",
+                    "text": {"body": ai_response}
+                }
+                headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+                await client.post(WHATSAPP_URL, json=payload, headers=headers)
+                
+            print(f"✅ Respondido a {user_phone}: {ai_response}")
+            
+    except Exception as e:
+        print(f"❌ Error procesando mensaje: {e}")
+        
+    return {"status": "success"}
+```
+
+__________
+3. El Paso Final: Suscripción en Meta
+Para que Meta te envíe los mensajes cuando alguien escriba, falta un paso en el panel:
+
+Ve al menú de la izquierda en Meta y haz clic en "Configuración" (debajo de Configuración de la API).
+
+Busca donde dice "Campos del Webhook" y haz clic en el botón "Administrar".
+
+Busca la fila que dice messages y dale al botón "Suscribirse".
+
+Dale a "Listo".

@@ -3,7 +3,8 @@ Utilidades para cálculo de disponibilidad y huecos libres.
 Este módulo contiene la lógica para evitar conflictos de horarios en las reservas.
 """
 
-from datetime import datetime, timedelta, time
+import pytz
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
@@ -12,6 +13,10 @@ from app.models.appointments import Appointment, AppointmentStatus
 from app.models.business_hours import BusinessHours, TimeSlot
 from app.models.collaborators import Collaborator
 from app.models.services import Service
+from app.core.settings import settings
+
+# Configuración de zona horaria del negocio
+BUSINESS_TZ = pytz.timezone(settings.APP_TIMEZONE)
 
 
 def get_available_slots(
@@ -39,6 +44,12 @@ def get_available_slots(
         List[dict]: Lista de huecos disponibles con información del colaborador
     """
     
+    # Asegurar que target_date esté en la zona horaria del negocio
+    if target_date.tzinfo is None:
+        target_date_local = BUSINESS_TZ.localize(target_date)
+    else:
+        target_date_local = target_date.astimezone(BUSINESS_TZ)
+    
     # 1. Validar que el servicio exista y obtener su duración
     service = db.query(Service).filter(Service.id == service_id).first()
     if not service:
@@ -50,7 +61,7 @@ def get_available_slots(
     service_duration = service.duration_minutes
     
     # 2. Obtener el día de la semana (0=Lunes, 6=Domingo)
-    day_of_week = target_date.weekday()
+    day_of_week = target_date_local.weekday()
     
     # 3. Obtener los horarios de negocio para ese día
     business_hours = db.query(BusinessHours).filter(
@@ -61,27 +72,35 @@ def get_available_slots(
     ).first()
     
     if not business_hours:
-        return []  # No hay horarios de negocio para este día
+        return []
     
-    # 4. Obtener colaboradores activos (filtrar por colaborador específico si se proporciona)
+    # 4. Obtener colaboradores activos (filtrar por ID específico si se proporciona)
     collaborators_query = db.query(Collaborator).filter(Collaborator.is_active == True)
     if collaborator_id:
         collaborators_query = collaborators_query.filter(Collaborator.id == collaborator_id)
     
-    available_collaborators = collaborators_query.all()
-    if not available_collaborators:
+    collaborators = collaborators_query.all()
+    
+    if not collaborators:
         return []
     
     # 5. Para cada colaborador, calcular sus huecos disponibles
     all_available_slots = []
     
-    for collaborator in available_collaborators:
-        # 5.1 Obtener las citas existentes del colaborador para esa fecha
+    for collaborator in collaborators:
+        # 5.1 Obtener citas existentes para ese colaborador en esa fecha
+        start_of_day = BUSINESS_TZ.localize(
+            datetime.combine(target_date_local.date(), datetime.min.time())
+        )
+        end_of_day = BUSINESS_TZ.localize(
+            datetime.combine(target_date_local.date(), datetime.max.time())
+        )
+        
         existing_appointments = db.query(Appointment).filter(
             and_(
                 Appointment.collaborator_id == collaborator.id,
-                Appointment.start_time >= target_date.replace(hour=0, minute=0, second=0, microsecond=0),
-                Appointment.start_time < target_date.replace(hour=23, minute=59, second=59, microsecond=999999),
+                Appointment.start_time < end_of_day,
+                Appointment.end_time > start_of_day,
                 Appointment.status.in_([
                     AppointmentStatus.SCHEDULED,
                     AppointmentStatus.CONFIRMED,
@@ -92,11 +111,13 @@ def get_available_slots(
         
         # 5.2 Procesar cada slot de tiempo del horario de negocio
         for time_slot in business_hours.time_slots:
-            # Convertir string time a datetime objects
-            slot_start_time = datetime.combine(target_date.date(), 
-                                              datetime.strptime(time_slot.start_time, "%H:%M").time())
-            slot_end_time = datetime.combine(target_date.date(), 
-                                            datetime.strptime(time_slot.end_time, "%H:%M").time())
+            # Convertir time objects a datetime objects en la zona del negocio
+            slot_start_time = BUSINESS_TZ.localize(
+                datetime.combine(target_date_local.date(), time_slot.start_time)
+            )
+            slot_end_time = BUSINESS_TZ.localize(
+                datetime.combine(target_date_local.date(), time_slot.end_time)
+            )
             
             # 5.3 Generar huecos disponibles en este slot
             slots_in_time_slot = generate_slots_in_range(
@@ -107,10 +128,13 @@ def get_available_slots(
                 collaborator
             )
             
-            all_available_slots.extend(slots_in_time_slot)
-    
-    # 6. Ordenar por hora de inicio
-    all_available_slots.sort(key=lambda x: x['start_time'])
+            # 5.4 Agregar información del colaborador a cada hueco
+            for slot in slots_in_time_slot:
+                slot.update({
+                    'collaborator_id': collaborator.id,
+                    'collaborator_name': collaborator.name
+                })
+                all_available_slots.append(slot)
     
     return all_available_slots
 
@@ -144,7 +168,7 @@ def generate_slots_in_range(
     available_slots = []
     current_time = slot_start
     
-    # Convertir appointments a intervalos de tiempo ocupados
+    # Convertir appointments a intervalos de tiempo ocupados (ya están en BUSINESS_TZ)
     occupied_intervals = []
     for apt in existing_appointments:
         # Solo considerar citas que intersectan con el slot actual
@@ -287,24 +311,25 @@ def is_valid_appointment_time(
     end_time: datetime
 ) -> Tuple[bool, str]:
     """
-    Verifica si un horario es válido para una nueva cita.
+    Valida que una cita cumpla todas las reglas de negocio.
     
-    Esta función valida múltiples restricciones:
-    1. Horario de negocio
-    2. Conflictos con otras citas
-    3. Colaborador activo
+    Esta función centraliza toda la validación de horarios:
+    1. Verifica que el colaborador exista y esté activo
+    2. Verifica que la cita no sea en el pasado
+    3. Verifica que esté dentro de horarios de negocio
+    4. Verifica que no haya conflictos con otras citas
     
     Args:
         db: Sesión de base de datos
         collaborator_id: ID del colaborador
-        start_time: Inicio de la cita
-        end_time: Fin de la cita
+        start_time: Inicio de la cita (con timezone)
+        end_time: Fin de la cita (con timezone)
     
     Returns:
-        Tuple[bool, str]: (es_válido, mensaje_de_error)
+        Tuple[bool, str]: (es_válido, mensaje_error)
     """
     
-    # 1. Verificar que el colaborador existe y está activo
+    # 1. Verificar que el colaborador exista y esté activo
     collaborator = db.query(Collaborator).filter(
         and_(
             Collaborator.id == collaborator_id,
@@ -315,12 +340,26 @@ def is_valid_appointment_time(
     if not collaborator:
         return False, f"Colaborador con ID {collaborator_id} no encontrado o no está activo"
     
-    # 2. Verificar que la cita no sea en el pasado
-    if start_time < datetime.now():
+    # 2. Asegurar que las fechas estén en la zona horaria del negocio
+    now_business = datetime.now(BUSINESS_TZ)
+    
+    # Convertir start_time y end_time a la zona del negocio si no la tienen
+    if start_time.tzinfo is None:
+        start_time_local = BUSINESS_TZ.localize(start_time)
+    else:
+        start_time_local = start_time.astimezone(BUSINESS_TZ)
+    
+    if end_time.tzinfo is None:
+        end_time_local = BUSINESS_TZ.localize(end_time)
+    else:
+        end_time_local = end_time.astimezone(BUSINESS_TZ)
+    
+    # 3. Verificar que la cita no sea en el pasado
+    if start_time_local < now_business:
         return False, "No se pueden programar citas en el pasado"
     
-    # 3. Verificar horario de negocio
-    day_of_week = start_time.weekday()
+    # 4. Verificar horario de negocio
+    day_of_week = start_time_local.weekday()
     business_hours = db.query(BusinessHours).filter(
         and_(
             BusinessHours.day_of_week == day_of_week,
@@ -329,25 +368,28 @@ def is_valid_appointment_time(
     ).first()
     
     if not business_hours:
-        return False, f"No hay horarios de negocio disponibles para el día {start_time.strftime('%A')}"
+        return False, f"No hay horarios de negocio disponibles para el día {start_time_local.strftime('%A')}"
     
-    # Verificar que la cita esté dentro de algún slot de tiempo
+    # 5. Verificar que la cita esté dentro de algún slot de tiempo
     is_within_business_hours = False
     for time_slot in business_hours.time_slots:
-        slot_start_time = datetime.combine(start_time.date(), 
-                                          datetime.strptime(time_slot.start_time, "%H:%M").time())
-        slot_end_time = datetime.combine(start_time.date(), 
-                                        datetime.strptime(time_slot.end_time, "%H:%M").time())
+        # Convertir time objects a datetime objects en la zona del negocio
+        slot_start_time = BUSINESS_TZ.localize(
+            datetime.combine(start_time_local.date(), time_slot.start_time)
+        )
+        slot_end_time = BUSINESS_TZ.localize(
+            datetime.combine(start_time_local.date(), time_slot.end_time)
+        )
         
-        if start_time >= slot_start_time and end_time <= slot_end_time:
+        if start_time_local >= slot_start_time and end_time_local <= slot_end_time:
             is_within_business_hours = True
             break
     
     if not is_within_business_hours:
         return False, "La hora seleccionada está fuera del horario de negocio"
     
-    # 4. Verificar conflictos con otras citas
-    has_conflict = check_appointment_conflict(db, collaborator_id, start_time, end_time)
+    # 6. Verificar conflictos con otras citas
+    has_conflict = check_appointment_conflict(db, collaborator_id, start_time_local, end_time_local)
     if has_conflict:
         return False, f"El colaborador {collaborator.name} ya tiene una cita programada en ese horario"
     

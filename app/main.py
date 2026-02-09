@@ -13,6 +13,18 @@ from app.api.v1.api_route import api_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(f"🚀 Starting FastAPI app in {settings.ENVIRONMENT} mode")
+
+    # --- VERIFICACIÓN DE ZONA HORARIA ---
+    import pytz
+    from datetime import datetime
+    try:
+        current_tz = pytz.timezone(settings.APP_TIMEZONE)
+        local_time = datetime.now(current_tz)
+        print(f"🌍 Timezone: {settings.APP_TIMEZONE}")
+        print(f"🕒 Local Time: {local_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    except Exception as e:
+        print(f"❌ Error configurando zona horaria: {e}")
+    # ------------------------------------
     
     # En lugar de imprimir settings.DATABASE_URL completo:
     if settings.DATABASE_URL:

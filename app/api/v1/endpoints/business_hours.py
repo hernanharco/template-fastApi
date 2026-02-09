@@ -104,7 +104,7 @@ async def get_business_hours(
     # Ordenamos por día de la semana para que venga en orden lógico
     business_hours = query.order_by(BusinessHours.day_of_week).all()
     
-    return BusinessHoursRead.from_orm(business_hours)
+    return [BusinessHoursRead.from_orm(bh) for bh in business_hours]
 
 
 @router.get("/{business_hours_id}", response_model=BusinessHoursRead)

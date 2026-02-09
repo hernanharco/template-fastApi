@@ -94,7 +94,7 @@ async def get_services(
     # Aplicamos paginación
     services = query.offset(skip).limit(limit).all()
     
-    return services
+    return [ServiceRead.from_orm(service) for service in services]
 
 
 @router.get("/{service_id}", response_model=ServiceRead)
@@ -123,7 +123,7 @@ async def get_service(
             detail=f"Servicio con ID {service_id} no encontrado"
         )
     
-    return service
+    return ServiceRead.from_orm(service)
 
 
 @router.put("/{service_id}", response_model=ServiceRead)
@@ -172,7 +172,7 @@ async def update_service(
             )
     
     # Actualizamos solo los campos proporcionados
-    update_data = service_data.dict(exclude_unset=True)
+    update_data = service_data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(service, field, value)
     
@@ -180,10 +180,10 @@ async def update_service(
     db.commit()
     db.refresh(service)
     
-    return service
+    return ServiceRead.from_orm(service)
 
 
-@router.delete("/{service_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{service_id}")
 async def delete_service(
     service_id: int,
     hard_delete: bool = Query(False, description="Si es True, elimina permanentemente el registro"),
@@ -216,6 +216,8 @@ async def delete_service(
         service.is_active = False
     
     db.commit()
+    
+    return {"message": "Servicio eliminado exitosamente"}
 
 
 @router.get("/stats/summary")

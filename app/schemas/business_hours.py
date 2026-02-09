@@ -71,8 +71,8 @@ class TimeSlotRead(BaseModel):
         """Crea instancia desde objeto SQLAlchemy con conversión de time a string."""
         return cls(
             id=obj.id,
-            start_time=obj.start_time_str,
-            end_time=obj.end_time_str,
+            start_time=obj.start_time.strftime("%H:%M") if obj.start_time else None,
+            end_time=obj.end_time.strftime("%H:%M") if obj.end_time else None,
             slot_order=obj.slot_order,
             business_hours_id=obj.business_hours_id,
             created_at=obj.created_at,
