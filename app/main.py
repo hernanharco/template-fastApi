@@ -6,18 +6,13 @@ import uvicorn
 
 from app.core.settings import settings
 from app.db.session import get_db, create_tables
-<<<<<<< HEAD
 from app.api.v1.api_route import api_router
-=======
-#from app.api.v1.api_route import api_router
->>>>>>> 527e4de9f5b4a6feec2737105b4ebde55f7fdcd9
 
 # 1. Definimos el ciclo de vida (Lifespan)
 # Este reemplaza a @app.on_event("startup")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(f"🚀 Starting FastAPI app in {settings.ENVIRONMENT} mode")
-<<<<<<< HEAD
 
     # --- VERIFICACIÓN DE ZONA HORARIA ---
     import pytz
@@ -30,8 +25,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"❌ Error configurando zona horaria: {e}")
     # ------------------------------------
-=======
->>>>>>> 527e4de9f5b4a6feec2737105b4ebde55f7fdcd9
     
     # En lugar de imprimir settings.DATABASE_URL completo:
     if settings.DATABASE_URL:
@@ -83,11 +76,7 @@ app.add_middleware(
 )
 
 # 4. Incluir router de API v1
-<<<<<<< HEAD
 app.include_router(api_router, prefix=settings.API_V1_STR)
-=======
-#app.include_router(api_router, prefix=settings.API_V1_STR)
->>>>>>> 527e4de9f5b4a6feec2737105b4ebde55f7fdcd9
 
 @app.get("/")
 async def root():
@@ -100,36 +89,22 @@ async def root():
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
     """
-<<<<<<< HEAD
     Endpoint de salud que verifica la conexión real a Neon de authCore
-=======
-    Endpoint de salud que verifica la conexión real a Neon de {settings.TITLE_BACKEND}
->>>>>>> 527e4de9f5b4a6feec2737105b4ebde55f7fdcd9
     """
     try:
         from sqlalchemy import text # Importante para SQLAlchemy 2.0
         db.execute(text("SELECT 1"))
         return {
-<<<<<<< HEAD
             "status": "healthy" + " " + settings.TITLE_BACKEND,
             "environment": settings.ENVIRONMENT,
             "db_provider": settings.NAME_DATABASE,
-=======
-            "status": "healthy " + settings.TITLE_BACKEND,
-            "environment": settings.ENVIRONMENT,
->>>>>>> 527e4de9f5b4a6feec2737105b4ebde55f7fdcd9
             "database": "connected"
         }
     except Exception as e:
         return {
-<<<<<<< HEAD
             "status": "unhealthy" + " " + settings.TITLE_BACKEND,
             "environment": settings.ENVIRONMENT,
             "db_provider": settings.NAME_DATABASE,
-=======
-            "status": "unhealthy " + settings.TITLE_BACKEND,
-            "environment": settings.ENVIRONMENT,
->>>>>>> 527e4de9f5b4a6feec2737105b4ebde55f7fdcd9
             "database": "disconnected",
             "error": str(e)
         }
