@@ -1,5 +1,4 @@
 {
-<<<<<<< HEAD
   "name": "coreappointment-backend",
   "version": "1.0.0",
   "description": "Backend API para gestión de servicios y horarios de negocio",
@@ -45,15 +44,3 @@
   },
   "homepage": "https://github.com/tu-usuario/coreappointment-backend#readme"
 }
-=======
-  "name": "auth-core-backend",
-  "version": "1.0.0",
-  "scripts": {
-    "dev": "uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
-    "docker:build": "docker build -t auth-core-backend .",
-    "docker:run": "docker run -p 8000:8000 --env-file .env auth-core-backend",
-    "setup:dev": "bash setup.sh development",
-    "setup:prod": "bash setup.sh production"
-  }
-}
->>>>>>> 527e4de9f5b4a6feec2737105b4ebde55f7fdcd9
