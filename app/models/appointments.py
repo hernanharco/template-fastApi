@@ -9,6 +9,8 @@ from sqlalchemy.orm import relationship
 import enum
 from app.models.base import Base
 
+from app.models.clients import Client
+
 
 class AppointmentStatus(str, enum.Enum):
     """Enumeración para los estados de las citas."""
@@ -66,6 +68,8 @@ class Appointment(Base):
     service = relationship("Service", back_populates="appointments")
     # Permite hacer: appointment.collaborator.name
     collaborator = relationship("Collaborator", back_populates="appointments")
+
+    client = relationship("Client", back_populates="appointments")
     
     def __repr__(self):
         return f"<Appointment(id={self.id}, client='{self.client_name}', start={self.start_time}, status={self.status})>"

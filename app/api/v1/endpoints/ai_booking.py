@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, Response, Query
-from app.agents.booking_agent import run_booking_agent
+from app.agents.main_master import ValeriaMaster
 import httpx
 import json
 from app.core.settings import settings
@@ -51,7 +51,7 @@ async def handle_whatsapp_message(request: Request):
             print(f"📩 Mensaje recibido de {user_phone}: {user_text}")
             
             # 1. Ejecutar el Agente de IA (Consulta disponibilidad en Neon)
-            ai_response = run_booking_agent(user_text)
+            ai_response = ValeriaMaster(user_text)
             
             # 2. Enviar respuesta de vuelta a WhatsApp
             async with httpx.AsyncClient() as client:

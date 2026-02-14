@@ -12,6 +12,8 @@ from app.models.appointments import Appointment, AppointmentStatus
 from app.models.business_hours import BusinessHours
 from app.models.collaborators import Collaborator
 from app.models.services import Service
+from app.core.settings import settings
+import pytz 
 
 def get_available_slots(
     db: Session,
@@ -38,6 +40,8 @@ def get_available_slots(
             Collaborator.is_active == True
         )
     )
+
+    active_collaborators = db.query(Collaborator).filter(Collaborator.is_active == True).all()
     
     if collaborator_id:
         query = query.filter(BusinessHours.collaborator_id == collaborator_id)
@@ -157,15 +161,23 @@ def generate_discrete_slots(
     slots = []
     current_slot_start = start_time
     
+    # 🕒 Obtenemos la hora actual "naive" para comparar
+    tz = pytz.timezone(settings.APP_TIMEZONE)
+    now = datetime.now(tz).replace(tzinfo=None)
+    
     while current_slot_start + timedelta(minutes=service_duration) <= end_time:
         slot_end = current_slot_start + timedelta(minutes=service_duration)
-        slots.append({
-            'start_time': current_slot_start, # Objeto datetime puro
-            'end_time': slot_end,
-            'collaborator_id': collaborator.id,
-            'collaborator_name': collaborator.name,
-            'available_minutes': service_duration
-        })
+        
+        # 🚀 FILTRO CRÍTICO: Solo agregamos el hueco si es en el futuro
+        if current_slot_start > now:
+            slots.append({
+                'start_time': current_slot_start,
+                'end_time': slot_end,
+                'collaborator_id': collaborator.id,
+                'collaborator_name': collaborator.name,
+                'available_minutes': service_duration
+            })
+            
         current_slot_start += timedelta(minutes=15)
     
     return slots
@@ -179,7 +191,8 @@ def is_valid_appointment_time(
     """
     Valida disponibilidad usando comparaciones Naive (sin TZ).
     """
-    now = datetime.now()
+    tz = pytz.timezone(settings.APP_TIMEZONE)
+    now = datetime.now(tz).replace(tzinfo=None)
     st_naive = start_time.replace(tzinfo=None) if start_time.tzinfo else start_time
     et_naive = end_time.replace(tzinfo=None) if end_time.tzinfo else end_time
 
@@ -236,6 +249,7 @@ def check_appointment_conflict(
     """
     Versión Naive del chequeo de conflictos.
     """
+    tz = pytz.timezone(settings.APP_TIMEZONE)
     st = start_time.replace(tzinfo=None) if start_time.tzinfo else start_time
     et = end_time.replace(tzinfo=None) if end_time.tzinfo else end_time
 
