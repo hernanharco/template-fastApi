@@ -35,25 +35,25 @@ class ServiceOrchestrator:
 
             if state.get("appointment_date"):
                 response = (
-                    f"¡Perfecto! **{selected_srv.name}** anotado. "
+                    f"¡Perfecto! *{selected_srv.name}* anotado. "
                     f"Ya me dijiste que querías el {state['appointment_date']}, "
                     f"déjame ver los huecos disponibles..."
                 )
             else:
-                response = f"¡Perfecto! He anotado **{selected_srv.name}**. ¿Para qué día y hora te gustaría agendar?"
+                response = f"¡Perfecto! He anotado *{selected_srv.name}*. ¿Para qué día y hora te gustaría agendar?"
 
             state["messages"].append({"role": "assistant", "content": response})
             return response, state["messages"]
 
         # CASO B: Ya teníamos servicio guardado
         elif current_service and current_service != "not_found":
-            response = f"Seguimos con tu cita para **{current_service}**. ¿Qué día te viene bien?"
+            response = f"Seguimos con tu cita para *{current_service}*. ¿Qué día te viene bien?"
             return response, state["messages"]
 
         # CASO C: Mostrar menú
         menu = "¡Claro! ¿Qué te gustaría hacerte? Aquí tienes nuestras opciones:\n"
         for s in services:
-            menu += f"• {s.name} (${s.price})\n"
+            menu += f"• {s.name}\n"
 
         state["messages"].append({"role": "assistant", "content": menu})
         return menu, state["messages"]

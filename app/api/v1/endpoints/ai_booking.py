@@ -1,14 +1,15 @@
-from fastapi import APIRouter, Request, Response, Query
+from fastapi import APIRouter, Request, Response, Query, Depends
+from sqlalchemy.orm import Session
 from app.agents.main_master import ValeriaMaster
+from app.db.session import get_db # Importa tu generador de sesión
 import httpx
-import json
 from app.core.settings import settings
 
 router = APIRouter()
 
-# --- CONFIGURACIÓN DE META ---
-# Recuerda que el WHATSAPP_TOKEN es temporal (24h). 
-# Si deja de funcionar, genera uno nuevo en el panel de Meta.
+# Instanciamos el Master una sola vez (es un objeto pesado)
+master_agent = ValeriaMaster()
+
 VERIFY_TOKEN = "mi_token_secreto_123"
 WHATSAPP_TOKEN = settings.WHATSAPP_TOKEN
 PHONE_NUMBER_ID = settings.PHONE_NUMBER_ID
@@ -20,65 +21,57 @@ async def verify_whatsapp(
     token: str = Query(None, alias="hub.verify_token"),
     challenge: str = Query(None, alias="hub.challenge")
 ):
-    """
-    Paso obligatorio para que Meta valide que tu servidor existe y es seguro.
-    """
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("✅ Webhook verificado correctamente por Meta")
         return Response(content=challenge, media_type="text/plain")
-    
-    print("❌ Fallo en la verificación del Webhook")
-    return Response(content="Error de verificación", status_code=403)
+    return Response(content="Error", status_code=403)
 
 @router.post("/whatsapp")
-async def handle_whatsapp_message(request: Request):
-    """
-    Recibe los mensajes del usuario, procesa con IA y responde.
-    """
+async def handle_whatsapp_message(
+    request: Request, 
+    db: Session = Depends(get_db) # <<< IMPORTANTE: Pedimos la sesión de Neon
+):
     try:
         body = await request.json()
         
-        # Estructura de Meta para extraer el mensaje
+        # 1. Extraer datos de Meta
         entry = body.get('entry', [{}])[0]
         changes = entry.get('changes', [{}])[0]
         value = changes.get('value', {})
         
         if 'messages' in value:
-            message = value['messages'][0]
-            user_phone = message['from']
-            user_text = message['text']['body']
+            message_data = value['messages'][0]
+            user_phone = message_data['from']
+            user_text = message_data['text']['body']
             
-            print(f"📩 Mensaje recibido de {user_phone}: {user_text}")
+            # --- 🧠 PROCESO DE IA ---
             
-            # 1. Ejecutar el Agente de IA (Consulta disponibilidad en Neon)
-            ai_response = ValeriaMaster(user_text)
+            # TODO: Aquí podrías buscar el historial en tu tabla de 'conversations'
+            # Por ahora pasamos una lista vacía para que el Master lo gestione
+            history = [] 
+
+            # Llamamos al método process que terminamos de arreglar antes
+            # Recuerda: process devuelve (respuesta_texto, nuevo_historial)
+            ai_response, _ = master_agent.process(
+                db=db, 
+                phone=user_phone, 
+                message=user_text, 
+                history=history
+            )
             
-            # 2. Enviar respuesta de vuelta a WhatsApp
+            # --- 📲 ENVÍO A WHATSAPP ---
             async with httpx.AsyncClient() as client:
                 payload = {
                     "messaging_product": "whatsapp",
-                    "recipient_type": "individual",
                     "to": user_phone,
                     "type": "text",
                     "text": {"body": ai_response}
                 }
-                headers = {
-                    "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-                    "Content-Type": "application/json"
-                }
+                headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
                 
-                response = await client.post(WHATSAPP_URL, json=payload, headers=headers)
-                
-                # --- BLOQUE DE DEBUG PARA EL JUNIOR ---
-                print(f"📡 Intentando enviar respuesta...")
-                if response.status_code == 200:
-                    print(f"✅ Respuesta enviada con éxito a {user_phone}")
-                else:
-                    print(f"⚠️ Error al enviar a Meta. Status: {response.status_code}")
-                    print(f"🔍 Detalle del error de Meta: {response.text}")
-                # --------------------------------------
+                await client.post(WHATSAPP_URL, json=payload, headers=headers)
+                print(f"✅ Respondido a {user_phone} via WhatsApp")
 
     except Exception as e:
-        print(f"❌ Error crítico procesando el webhook: {str(e)}")
+        print(f"❌ Error en Webhook: {str(e)}")
         
     return {"status": "success"}

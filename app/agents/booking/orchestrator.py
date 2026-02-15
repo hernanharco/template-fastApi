@@ -52,7 +52,7 @@ class BookingOrchestrator:
                     print(f"⚠️ [Booking] Bloqueo: {service_name} a las {time_sel} no tiene personal libre.")
                     state["appointment_time"] = None  # Borramos la hora del estado
                     
-                    res = (f"Lo siento, para el servicio de **{service_name}** a las {time_sel} "
+                    res = (f"Lo siento, para el servicio de *{service_name}* a las {time_sel} "
                            f"ya no tenemos especialistas disponibles. 😕\n\n"
                            f"¿Te gustaría intentar en otro horario?")
                     
@@ -70,19 +70,19 @@ class BookingOrchestrator:
         # Caso A: No tenemos fecha todavía
         if not date:
             state["slots_shown"] = False
-            res = f"¡Perfecto! Para agendar tu cita de **{service_name}**, dime: ¿qué día te vendría bien?"
+            res = f"¡Perfecto! Para agendar tu cita de *{service_name}*, dime: ¿qué día te vendría bien?"
 
         # Caso B: Hay fecha, pero no hay huecos (slots) en general
         elif slots in ("Sin disponibilidad", None, ""):
             state["slots_shown"] = False
             date_fmt = datetime.strptime(date, "%Y-%m-%d").strftime("%d/%m/%Y")
-            res = f"Para el {date_fmt} no me quedan huecos libres para **{service_name}**. ¿Quieres intentar otro día?"
+            res = f"Para el {date_fmt} no me quedan huecos libres para *{service_name}*. ¿Quieres intentar otro día?"
 
         # Caso C: Todo OK, mostramos los horarios disponibles
         else:
             state["slots_shown"] = True
             date_fmt = datetime.strptime(date, "%Y-%m-%d").strftime("%d/%m/%Y")
-            res = f"Para **{service_name}** el {date_fmt} tengo estos huecos libres: {slots}. ¿Cuál prefieres?"
+            res = f"Para *{service_name}* el {date_fmt} tengo estos huecos libres: {slots}. ¿Cuál prefieres?"
 
         state["messages"].append({"role": "assistant", "content": res})
         return res, state["messages"]

@@ -102,7 +102,7 @@ class AppointmentsOrchestrator:
         # --- 4. LÓGICA DE ESTADOS DEL GRAFO ---
         elif status == "confirmed":
             res = (
-                f"¡Todo listo! Tu cita de **{service_name}** quedó agendada para el "
+                f"¡Todo listo! Tu cita de *{service_name}* quedó agendada para el "
                 f"{date_fmt} a las {time_str} 🎉 (Ref: #{appt_id})"
             )
             state["appointment_date"]  = None
@@ -120,7 +120,7 @@ class AppointmentsOrchestrator:
             state["slots_shown"] = True
 
         elif status == "missing_data":
-            res = f"Me falta información. ¿Para qué día querías la cita de **{service_name}**?"
+            res = f"Me falta información. ¿Para qué día querías la cita de *{service_name}*?"
             state["slots_shown"] = False
 
         else:
