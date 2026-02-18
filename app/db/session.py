@@ -1,9 +1,11 @@
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError  # Importante para capturar fallos de red/auth
 
 from app.core.settings import settings
+
+# Importamos declarative_base desde el modelo base
+from app.models.base import Base
 
 # 1. Creamos el engine
 # El parámetro pool_pre_ping=True ya ayuda, pero no evita el error al arrancar
@@ -14,7 +16,6 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
 
 def get_db():
     db = SessionLocal()

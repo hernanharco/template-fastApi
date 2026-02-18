@@ -1,59 +1,75 @@
+import os
 from sqlalchemy.orm import Session
 from app.models.services import Service
 
-
 class ServiceOrchestrator:
+    """
+    SRP: Gestionar la información y visualización del catálogo de servicios.
+    [cite: 2026-02-18] Persistencia unificada en NEON con trazabilidad.
+    """
+
+    def get_catalog_summary(self, db: Session) -> str:
+        """
+        Genera una lista amigable para el saludo proactivo del Master.
+        [cite: 2026-02-18] Menos infraestructura, más valor.
+        """
+        print("📡 [SERVICE-ORCH] Generando resumen rápido del catálogo...")
+        try:
+            services = db.query(Service).filter(Service.is_active == True).all()
+            if not services:
+                print("⚠️ [SERVICE-ORCH] Sin servicios para el resumen.")
+                return "Actualmente estamos actualizando nuestros servicios. 🌸"
+
+            # Emojis para que la interacción no sea 'al aire'
+            icons = {
+                "cejas": "👁️", "pestañas": "✨", "manicura": "💅", 
+                "pedicura": "👣", "facial": "🧖‍♀️", "masaje": "💆‍♂️"
+            }
+
+            lines = []
+            for s in services:
+                emoji = next((v for k, v in icons.items() if k in s.name.lower()), "🌸")
+                # Incluimos el precio para que el usuario elija con info completa
+                precio = f" - *${s.price}*" if hasattr(s, 'price') and s.price else ""
+                lines.append(f"{emoji} **{s.name}**{precio}")
+            
+            return "\n".join(lines)
+        except Exception as e:
+            print(f"❌ [SERVICE-ORCH] Error en resumen: {str(e)}")
+            return "Nuestros servicios de estética profesional."
+
     def process_service(self, db: Session, state: dict):
-        # ✅ Buscar el último mensaje del USUARIO, no el último en general
-        # (el último puede ser del asistente tras pasar por greeting_node)
-        messages   = state.get("messages", [])
-        user_msgs  = [m for m in messages if m.get("role") == "user"]
-        message    = user_msgs[-1]["content"].lower().strip() if user_msgs else ""
+        """
+        Lógica completa cuando el usuario pide explícitamente ver el catálogo.
+        """
+        print("\n" + "="*50)
+        print("🔍 [SERVICE-ORCH] Iniciando flujo de ayuda detallada...")
+        
+        requested = state.get("service_type")
+        print(f"📥 [SERVICE-ORCH] Input: '{requested}'")
 
-        current_service = state.get("service_type")
+        # Reutilizamos la lógica del summary para mantener consistencia
+        servicios_list = self.get_catalog_summary(db)
 
-        services = db.query(Service).filter(Service.is_active == True).all()
-        selected_srv = None
+        # Lógica de Mensajería Proactiva
+        if requested and requested != "not_found":
+            print(f"💡 [SERVICE-ORCH] Corrección de: '{requested}'")
+            intro = f"No logré encontrar '{requested}' en nuestro sistema, pero mira lo que tenemos para ti: 😉"
+        else:
+            print("👋 [SERVICE-ORCH] Saludo inicial de catálogo.")
+            intro = "¡Qué gusto saludarte! 👋 Aquí tienes nuestros servicios disponibles:"
 
-        for s in services:
-            nombre_db = s.name.lower()
-            # Normalizar tildes del mensaje para comparar
-            msg_clean = (message
-                .replace("á","a").replace("é","e").replace("í","i")
-                .replace("ó","o").replace("ú","u"))
-            nom_clean = (nombre_db
-                .replace("á","a").replace("é","e").replace("í","i")
-                .replace("ó","o").replace("ú","u"))
-            if nom_clean in msg_clean or ("acril" in msg_clean and "acril" in nom_clean):
-                selected_srv = s
-                break
+        response = (
+            f"{intro}\n\n"
+            f"{servicios_list}\n\n"
+            "¿Cuál de estos te gustaría elegir hoy?"
+        )
 
-        # CASO A: El usuario acaba de elegir un servicio AHORA
-        if selected_srv:
-            state["service_type"] = selected_srv.name
-            print(f"✅ [Service] Match nuevo: {selected_srv.name}")
-
-            if state.get("appointment_date"):
-                response = (
-                    f"¡Perfecto! *{selected_srv.name}* anotado. "
-                    f"Ya me dijiste que querías el {state['appointment_date']}, "
-                    f"déjame ver los huecos disponibles..."
-                )
-            else:
-                response = f"¡Perfecto! He anotado *{selected_srv.name}*. ¿Para qué día y hora te gustaría agendar?"
-
-            state["messages"].append({"role": "assistant", "content": response})
-            return response, state["messages"]
-
-        # CASO B: Ya teníamos servicio guardado
-        elif current_service and current_service != "not_found":
-            response = f"Seguimos con tu cita para *{current_service}*. ¿Qué día te viene bien?"
-            return response, state["messages"]
-
-        # CASO C: Mostrar menú
-        menu = "¡Claro! ¿Qué te gustaría hacerte? Aquí tienes nuestras opciones:\n"
-        for s in services:
-            menu += f"• {s.name}\n"
-
-        state["messages"].append({"role": "assistant", "content": menu})
-        return menu, state["messages"]
+        # Actualización de historia
+        history = state.get("messages", [])
+        history.append({"role": "assistant", "content": response})
+        
+        print("📤 [SERVICE-ORCH] Respuesta generada con éxito.")
+        print("="*50 + "\n")
+        
+        return response, history

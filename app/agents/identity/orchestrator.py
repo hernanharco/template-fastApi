@@ -1,69 +1,48 @@
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from app.models.clients import Client
-from app.agents.identity.graph_builder import create_valeria_graph
 
 class IdentityOrchestrator:
-    def __init__(self):
-        self.graph = create_valeria_graph()
+    """
+    SRP: Gestionar la carga y persistencia del contexto del cliente en NEON.
+    [cite: 2026-02-18]
+    """
 
-    def get_user_context(self, db: Session, phone: str, user_message: str, history: list):
+    def get_user_context(self, db: Session, phone: str, message: str, history: list) -> dict:
+        """Recupera o crea el estado del cliente."""
         client = db.query(Client).filter(Client.phone == phone).first()
-
-        # Un cliente es "genérico" si no existe o si su nombre es "Usuario"
-        is_generic = not client or client.full_name in ["Usuario", "Cliente", None]
-
-        service_name = None
-        if client and client.current_service_id: # Usamos ID para evitar errores de relación
-            from app.models.services import Service
-            srv = db.query(Service).filter(Service.id == client.current_service_id).first()
-            if srv: service_name = srv.name
-
-        nuevo_historial = history + [{"role": "user", "content": user_message}]
-
-        state = {
-            "messages":     nuevo_historial,
-            "client_name":  client.full_name if client else "Usuario",
-            "phone":        phone,
-            "service_type": service_name,
-            "is_new_client": is_generic 
-        }
-
-        final_state = self.graph.invoke(state)
-        extracted_name = final_state.get("client_name")
         
-        # --- CAMBIO CLAVE: Lógica de Persistencia ---
-        has_real_name = extracted_name and extracted_name.lower() not in ["usuario", "cliente", "none"]
-
         if not client:
-            if has_real_name:
-                # Si dijo su nombre, lo creamos de una vez bien
-                self._register_client(db, phone, extracted_name)
-                final_state["is_new_client"] = False
-            else:
-                # Si no hay nombre, NO lo creamos en DB.
-                # Mantenemos el flag en True para que Valeria pregunte.
-                final_state["is_new_client"] = True
+            client = Client(phone=phone, metadata_json={"messages": [], "service_type": None})
+            db.add(client)
+            db.commit()
+            db.refresh(client)
+            print(f"🆕 [IDENTITY] Nuevo cliente creado: {phone}")
+
+        state = client.metadata_json or {}
+        # Aseguramos que existan las llaves básicas
+        if "messages" not in state: state["messages"] = []
+        if "service_type" not in state: state["service_type"] = None
         
-        elif is_generic and has_real_name:
-            # Si ya existía como "Usuario", ahora lo actualizamos a su nombre real
-            client.full_name = extracted_name
-            db.commit()
-            print(f"📝 [DB] Nombre actualizado físicamente: {extracted_name}")
-            final_state["is_new_client"] = False
+        print(f"✅ [IDENTITY] Contexto cargado para {phone}. Servicio actual: '{state.get('service_type')}'")
+        return state
 
-        return final_state
-
-    def _register_client(self, db: Session, phone: str, name: str):
-        new_client = Client(
-            full_name=name,
-            phone=phone,
-            source="ia",
-            metadata_json={"status": "new_lead"}
-        )
-        db.add(new_client)
-        try:
+    def save_user_context(self, db: Session, phone: str, state: dict):
+        """
+        Guarda el estado físicamente en NEON.
+        Usa flag_modified para asegurar que SQLAlchemy detecte cambios en el JSONB.
+        """
+        client = db.query(Client).filter(Client.phone == phone).first()
+        if client:
+            # Actualizamos el diccionario
+            client.metadata_json = state
+            
+            # CRUCIAL: Forzamos a SQLAlchemy a ver el cambio interno del JSON
+            flag_modified(client, "metadata_json")
+            
             db.commit()
-            print(f"✨ [DB] Cliente {name} creado con éxito.")
-        except Exception as e:
-            db.rollback()
-            print(f"❌ [DB] Error al registrar: {e}")
+            print(f"💾 [IDENTITY] Estado persistido en NEON para {phone}")
+
+    def process(self, db: Session, state: dict) -> str:
+        """Lógica de saludo o identidad básica."""
+        return "¡Hola! Soy Valeria, tu asistente virtual. ¿En qué puedo ayudarte hoy?"

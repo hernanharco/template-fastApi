@@ -13,7 +13,7 @@ class Collaborator(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    # --- RELACIONES ---
+    # RELACIÓN MUCHOS A MUCHOS
     departments = relationship(
         "Department", 
         secondary=collaborator_departments, 
@@ -22,16 +22,3 @@ class Collaborator(Base):
 
     business_hours = relationship("BusinessHours", back_populates="collaborator", cascade="all, delete-orphan")
     appointments = relationship("Appointment", back_populates="collaborator", cascade="all, delete-orphan")
-    
-    def __repr__(self):
-        return f"<Collaborator(id={self.id}, name='{self.name}')>"
-    
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "name": self.name,
-            "email": self.email,
-            "is_active": self.is_active,
-            "departments": [d.name for d in self.departments],
-            "created_at": self.created_at.isoformat() if self.created_at else None
-        }

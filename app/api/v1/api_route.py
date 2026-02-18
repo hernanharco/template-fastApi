@@ -4,7 +4,7 @@ Este módulo agrupa todos los endpoints de la versión 1 de la API.
 """
 
 from fastapi import APIRouter
-from app.api.v1.endpoints import services, business_hours, collaborators, appointments, availability, ai_booking, clients
+from app.api.v1.endpoints import services, business_hours, collaborators, appointments, availability, ai_booking, clients, department
 
 # 1. Creamos el router sin prefijo de versión.
 # El prefijo /api/v1 ya lo pone el main.py
@@ -60,4 +60,11 @@ api_router.include_router(
     clients.router,
     prefix="/clients",
     tags=["clients"]
+)
+
+# DOminio de Departamentos
+api_router.include_router(
+    department.router,
+    prefix="/department",
+    tags=["department"]
 )

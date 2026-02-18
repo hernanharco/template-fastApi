@@ -58,4 +58,4 @@ def test_conexion_real_neon():
         print(f"{'-'*60}\n")
 
 if __name__ == "__main__":
-    test_conexion_real_neon()
+    test_conexion_real_neon() # 🚀 Ejecuta el test

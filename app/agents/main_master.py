@@ -1,199 +1,135 @@
 import os
-import re
 from datetime import datetime
+from typing import List, Tuple, Dict
+from dotenv import load_dotenv
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
 
+# Orquestadores de Dominio (SRP)
 from app.agents.identity.orchestrator import IdentityOrchestrator
 from app.agents.service.orchestrator import ServiceOrchestrator
 from app.agents.booking.orchestrator import BookingOrchestrator
-from app.agents.appointments.orchestrator import AppointmentsOrchestrator
-from app.agents.config import SERVICE_KEYWORDS, BOOKING_KEYWORDS, CONFIRMATION_KEYWORDS
-from app.models.clients import Client
-from app.models.services import Service
-from app.agents.booking.nodes.extractor_node import extractor_node # Importante para el pre-check
+
+# Core Tools y Lógica de Negocio
+from app.agents.core.master_extractor import master_extractor
+from app.agents.core.sanitizer import ResponseSanitizer 
+from app.agents.booking.fuzzy_logic import service_fuzzy_match
+
+load_dotenv()
 
 class ValeriaMaster:
+    """
+    SRP: Orquestador Maestro (Root).
+    [cite: 2026-02-18] Centraliza la lógica multi-tenant y garantiza que 
+    la persistencia en NEON sea siempre con nombres oficiales.
+    """
+
     def __init__(self):
-        self.identity     = IdentityOrchestrator()
-        self.service      = ServiceOrchestrator()
-        self.booking      = BookingOrchestrator()
-        self.appointments = AppointmentsOrchestrator()
+        self.identity = IdentityOrchestrator()
+        self.service = ServiceOrchestrator()
+        self.booking = BookingOrchestrator()
+        self.sanitizer = ResponseSanitizer()
 
-    def process(self, db: Session, phone: str, message: str, history: list):
-        # 1. Contexto básico y normalización
+    def process(self, db: Session, phone: str, message: str, history: List[Dict]):
+        """
+        Punto de entrada principal. Gestiona la carga, limpieza, 
+        procesamiento y persistencia del contexto del usuario.
+        """
+        print(f"\n--- ⚡ [MASTER] PROCESANDO MENSAJE ---")
+        
+        # 1. Recuperar contexto desde NEON
         state = self.identity.get_user_context(db, phone, message, history)
-        msg_raw = message.lower().strip()
-        msg_clean = msg_raw.translate(str.maketrans("áéíóú", "aeiou"))
+        self._enforce_time_window(state)
         
-        # --- 🕒 DETECCIÓN TEMPRANA (IA EXTRACTOR) ---
-        state["current_date"] = datetime.now().strftime("%Y-%m-%d")
-        extracted = extractor_node(state)
+        # 2. LIMPIEZA DE ESTADO PREVIO (Normalización inmediata)
+        if state.get("service_type"):
+            match_state = service_fuzzy_match(db, state["service_type"])
+            if match_state:
+                state["service_type"] = match_state[0]
+                state["service_id"] = match_state[1]
 
-        state["phone"] = phone
+        # 3. Extracción de nueva información con IA
+        extracted = master_extractor(db, message, state)
+        intent = str(extracted.get("intent", "unknown")).lower()
         
-        if extracted.get("appointment_date"):
-            state["appointment_date"] = extracted["appointment_date"]
-        if extracted.get("appointment_time"):
-            state["appointment_time"] = extracted["appointment_time"]
-
-        # --- 🛡️ CARGA DE DATOS DEL CLIENTE ---
-        client = db.query(Client).filter(Client.phone == phone).first()
-        db_service_name = None
-        if client and client.current_service_id:
-            srv = db.query(Service).filter(Service.id == client.current_service_id).first()
-            if srv:
-                db_service_name = srv.name
-
-        if db_service_name:
-            state["service_type"] = db_service_name
-            has_service = True
-        else:
-            has_service = False
-
-        # Recuperar persistencia de metadata
-        if client and client.metadata_json:
-            if not state.get("appointment_date"):
-                state["appointment_date"] = client.metadata_json.get("appointment_date")
-            if not state.get("appointment_time"):
-                state["appointment_time"] = client.metadata_json.get("appointment_time")
-            state["slots_shown"] = client.metadata_json.get("slots_shown", False)
-
-        # 2. Detección de intenciones
-        is_service_intent      = any(k in msg_clean for k in SERVICE_KEYWORDS)
-        is_booking_intent      = any(k in msg_clean for k in BOOKING_KEYWORDS)
-        is_confirmation_intent = any(k in msg_clean for k in CONFIRMATION_KEYWORDS)
-        
-        # 🚩 NUEVA DETECCIÓN: ¿El usuario quiere cambiar o ver el catálogo?
-        change_keywords = ["otra cosa", "otro servicio", "cambiar", "menu", "catalogo", "servicios"]
-        wants_to_change = any(k in msg_clean for k in change_keywords)
-        
-        has_time_ref = any(k in msg_clean for k in [":", " am", " pm", " a las "]) or re.search(r'\d+', msg_clean)
-
-        # Buscar si mencionó un servicio específico
-        all_services = db.query(Service).filter(Service.is_active == True).all()
-        service_mentioned = next((s for s in sorted(all_services, key=lambda x: len(x.name), reverse=True) 
-                                 if s.name.lower().translate(str.maketrans("áéíóú", "aeiou")) in msg_clean), None)
-
-        # --- 🚦 ROUTING (Lógica Pulida) ---
-
-        # Si el cliente es nuevo o genérico, y el mensaje actual no parece contener su nombre
-
-        if state.get("is_new_client") and state.get("client_name") == "Usuario":
-            # Si el mensaje es corto y no tiene intención de cita, preguntamos nombre
-            # Pero si el mensaje es largo (ej: "Soy Hernan y quiero cita"), el orquestador 
-            # de identidad ya debería haber actualizado el client_name en el state.
-            if len(msg_clean.split()) < 2: 
-                response = "¡Hola! Bienvenid@ a nuestro centro. 😊 Veo que es tu primera vez por aquí. ¿Me podrías decir tu nombre para atenderte mejor?"
-                # Guardamos antes de salir para no perder el hilo
-                self._sync_memory(db, phone, state, client)
-                return response, state["messages"] + [{"role": "assistant", "content": response}]
-    
-    # Si llegamos aquí y sigue siendo "Usuario", es que el mensaje era largo pero 
-    # no contenía un nombre claro. Podríamos dejarlo pasar o insistir.
-
-        # REGLA 0: ¡CAMBIO DE OPINIÓN EXPLÍCITO! 
-        # Si el usuario dice "quiero otra cosa", limpiamos el estado y mandamos al catálogo.
-        if wants_to_change and not service_mentioned:
-            print(f"🧹 [Master] Usuario quiere cambiar de opinión. Limpiando estado...")
-            self._clear_booking_state(db, client)
-            state["service_type"] = None
-            response, updated_history = self.service.process_service(db, state)
-
-        # REGLA 1: Selección de un servicio específico por nombre
-        elif service_mentioned:
-            print(f"🔄 [Master] Match de servicio: {service_mentioned.name}")
-            if has_service and db_service_name != service_mentioned.name:
-                self._clear_booking_state(db, client)
-                state["appointment_date"] = state["appointment_time"] = None
-            state["service_type"] = service_mentioned.name
-            response, updated_history = self.service.process_service(db, state)
-
-        # REGLA 2: Confirmación final (Fecha + Hora presentes)
-        elif has_service and state.get("appointment_date") and state.get("appointment_time"):
-            print(f"🚀 [Master] Cierre detectado")
-
-            state["phone"] = phone
-
-            response, updated_history = self.appointments.process(db, state)
-            if state.get("booking_confirmed"):
-                self._clear_booking_state(db, client)
-
-        # REGLA 3: Refinamiento (Tiene fecha, busca hora)
-        elif has_service and state.get("appointment_date") and (has_time_ref or state.get("slots_shown")):
-            print(f"📌 [Master] Refinamiento")
-            response, updated_history = self.appointments.process(db, state)
-
-        # REGLA 4: Flujo de disponibilidad (Booking)
-        elif is_service_intent or is_booking_intent or (has_service and is_confirmation_intent):
-            if has_service:
-                print(f"📅 [Master] Flujo: Booking")
-                response, updated_history = self.booking.process_booking(db, state)
+        # 4. Normalizar lo que la IA detectó en este mensaje nuevo
+        service_raw = extracted.get("service")
+        if service_raw:
+            match_new = service_fuzzy_match(db, service_raw)
+            if match_new:
+                state["service_type"] = match_new[0]
+                state["service_id"] = match_new[1]
+                print(f"✨ [MASTER] Servicio normalizado: {match_new[0]}")
             else:
-                print(f"🔍 [Master] Flujo: Catálogo")
-                response, updated_history = self.service.process_service(db, state)
+                if not state.get("service_type"):
+                    state["service_type"] = service_raw
 
-        # REGLA 5: Charla casual
-        else:
-            print(f"💬 [Master] Flujo: Charla Casual")
-            response = state["messages"][-1]["content"]
-            updated_history = state["messages"]
-
-        self._sync_memory(db, phone, state, client)
-        return response, updated_history
-
-    def _sync_memory(self, db: Session, phone: str, state: dict, client: Client = None):
-        if not client: return
-
-        # 1. Gestión del Servicio Actual (current_service_id)
-        # Si la cita ya se confirmó, limpiamos el servicio para que la próxima charla empiece de cero
-        if state.get("booking_confirmed"):
-            client.current_service_id = None
-            state["service_type"] = None
-            print(f"✅ [Memory] Cita confirmada. Limpiando servicio actual para {phone}")
-        else:
-            service_name = state.get("service_type")
-            if service_name and service_name != "not_found":
-                srv = db.query(Service).filter(Service.name == service_name).first()
-                if srv: 
-                    client.current_service_id = srv.id
-            else:
-                # Si no hay un servicio claro en el estado, lo limpiamos en la DB
-                client.current_service_id = None
-
-        # 2. Gestión de Metadata (JSONB en Neon)
-        if client.metadata_json is None: 
-            client.metadata_json = {}
-
-        # Actualizamos la persistencia con lo que pasó en esta interacción
-        client.metadata_json.update({
-            "last_interaction": state["messages"][-1]["content"][:100],
-            "appointment_date": state.get("appointment_date"),
-            "appointment_time": state.get("appointment_time"),
-            "slots_shown": state.get("slots_shown", False)
-        })
-
-        # Si confirmamos cita, también limpiamos los datos temporales del JSON
-        if state.get("booking_confirmed"):
-            client.metadata_json.pop("appointment_date", None)
-            client.metadata_json.pop("appointment_time", None)
-            client.metadata_json.pop("slots_shown", None)
-
-        # 3. Guardado físico en DB
-        # Notificamos a SQLAlchemy que el JSON cambió
-        flag_modified(client, "metadata_json")
+        # 5. Determinar la ruta (Lógica corregida para evitar bucles)
+        final_route = self._determine_smart_route(message, intent, state)
         
-        try:
-            db.commit()
-            print(f"💾 [DB] Memoria sincronizada correctamente para {phone}")
-        except Exception as e:
-            db.rollback()
-            print(f"❌ [DB] Error al sincronizar memoria: {e}")
+        # 6. Ejecución (Dispatch)
+        raw_response, updated_messages = self._dispatch(db, state, final_route, message)
+        
+        # 7. Persistencia final en NEON con last_updated [cite: 2026-02-18]
+        state["messages"] = updated_messages
+        state["last_updated"] = datetime.now().isoformat()
+        self.identity.save_user_context(db, phone, state)
 
-    def _clear_booking_state(self, db: Session, client: Client):
-        if not client or not client.metadata_json: return
-        for key in ["appointment_date", "appointment_time", "slots_shown"]:
-            client.metadata_json.pop(key, None)
-        flag_modified(client, "metadata_json")
-        db.commit()
-        print(f"🧹 [DB] Estado de booking reseteado.")
+        return self.sanitizer.clean(raw_response), state
+
+    def _enforce_time_window(self, state: Dict):
+        """Limpia el contexto si pasaron más de 4 horas."""
+        last_str = state.get("last_updated")
+        if last_str:
+            last_dt = datetime.fromisoformat(last_str)
+            if (datetime.now() - last_dt).total_seconds() > 14400:
+                state["service_type"] = None
+
+    def _determine_smart_route(self, message: str, intent: str, state: Dict) -> str:
+        """
+        SRP: Lógica de decisión de rutas. 
+        Ajustado para evitar que el flujo de reserva regrese a 'saludo'.
+        """
+        msg = message.lower().strip()
+        ya_tiene_servicio = state.get("service_type") is not None
+        
+        # 1. Saludos puros (Solo si el mensaje es corto y es un saludo claro)
+        saludos = ["hola", "buenas", "hey", "buenos dias"]
+        if msg in saludos or (intent == "saludo" and len(msg.split()) < 3):
+            return "saludo"
+
+        # 2. Si ya tenemos un servicio, priorizamos seguir agendando
+        if ya_tiene_servicio:
+            # Si quiere ver catálogo explícitamente, lo dejamos cambiar
+            if intent in ["ver_catalogo", "catalog"]:
+                return "ver_catalogo"
+            # De lo contrario, cualquier mensaje (fecha, confirmación, duda) va a Booking
+            return "agendar"
+
+        # 3. Si quiere agendar pero no hay servicio en el estado
+        if intent == "agendar" and not ya_tiene_servicio:
+            return "ver_catalogo"
+
+        # 4. Intenciones directas
+        if intent in ["ver_catalogo", "catalog"]: return "ver_catalogo"
+        if intent == "agendar": return "agendar"
+        
+        return "saludo"
+
+    def _determine_final_route(self, message: str, intent: str, state: Dict) -> str:
+        """Alias para compatibilidad con TestMasterLogic."""
+        return self._determine_smart_route(message, intent, state)
+
+    def _dispatch(self, db: Session, state: Dict, route: str, raw_message: str) -> Tuple[str, List]:
+        if route == "agendar":
+            return self.booking.process_booking(db, state, raw_message)
+
+        if route in ["saludo", "ver_catalogo"]:
+            saludo = self.identity.process(db, state)
+            catalog_summary = self.service.get_catalog_summary(db) 
+            res = f"{saludo}\n\nActualmente ofrecemos:\n{catalog_summary}\n\n¿Te gustaría agendar alguno?"
+            
+            msgs = state.get("messages", [])
+            msgs.append({"role": "assistant", "content": res})
+            return res, msgs
+
+        return self.service.process_service(db, state)

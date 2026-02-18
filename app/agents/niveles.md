@@ -20,3 +20,27 @@ agent_state.py,"La Memoria: Define el esquema de datos (TypedDict) que Valeria r
 greeting_node.py,La Voz: Nodo dedicado exclusivamente a generar el saludo y mantener el tono humano de la conversación.
 graph_builder.py,"El Mapa: Configura el flujo de LangGraph, definiendo qué nodo sigue a cuál y dónde empieza/termina el proceso."
 orchestrator.py,"El Puente: Clase encargada de conectar FastAPI con el grafo, manejando la entrada de WhatsApp y la sesión de DB."
+
+1. Extractor Node (El Traductor)
+Su función: Es el único que "lee" el lenguaje humano.
+
+Responsabilidad: Convertir el texto sucio del usuario en datos limpios (JSON). No sabe nada de bases de datos, solo sabe de gramática e intenciones.
+
+2. Availability Node (El Bibliotecario)
+Su función: Es el puente con tus modelos de SQLAlchemy (Neon).
+
+Responsabilidad: Ir a la base de datos y decir: "¿Hay hueco el miércoles?". No decide qué responder, solo entrega los datos crudos.
+
+3. Orchestrator (El Jefe de Departamento)
+Aquí es donde estaba tu duda. En tu estructura, el Orchestrator (ej: BookingOrchestrator) es el que maneja un dominio específico.
+
+Su función: Recibir los datos del Extractor y los datos del Availability Node para armar la respuesta final.
+
+Responsabilidad: "Si el Availability Node dice que no hay citas, yo (el Orquestador) redacto el mensaje: Lo siento, no hay cupo, pero tengo estos otros días...".
+
+Diferencia con el Master: El Master es el "Dueño del Negocio" (manda a todo el bot). El Orquestador de Booking es solo el "Gerente de Citas".
+
+4. Graph Builder (El Mapa de Carreteras)
+Su función: Definir el orden.
+
+Responsabilidad: Dice: "Primero ejecuta el Extractor, LUEGO pasa al Orquestador de Booking". Si usas LangGraph, aquí es donde dibujas las flechas.

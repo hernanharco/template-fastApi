@@ -1,0 +1,89 @@
+import json
+from datetime import datetime
+from openai import OpenAI
+from app.agents.agent_state import AgentState
+
+client_ai = OpenAI()
+
+def extractor_node(state: AgentState) -> dict:
+    # 1. Preparar contexto temporal
+    ahora = datetime.now()
+    hoy_str = ahora.strftime("%Y-%m-%d")
+    hoy_nombre = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"][ahora.weekday()]
+    hora_actual = ahora.strftime("%H:%M")
+    
+    # 🚀 CLAVE: Extraemos la fecha que ya tenemos en memoria para dársela como contexto al LLM
+    fecha_actual_contexto = state.get("appointment_date")
+
+    messages = state.get("messages", [])
+    user_msgs = [m for m in messages if m.get("role") == "user"]
+    last_msg = user_msgs[-1]["content"].strip() if user_msgs else ""
+
+    if not last_msg:
+        return {**state, "appointment_time": None}
+
+    system_prompt = f"""Hoy es {hoy_str} ({hoy_nombre}) y la hora actual es {hora_actual}.
+        Tu misión es extraer datos de reserva en JSON.
+
+        REGLAS DE ORO:
+        1. date: YYYY-MM-DD. 
+        2. time: HH:MM. SOLO extrae 'time' si el usuario elige una hora EXACTA de las opciones dadas.
+        3. min_time: SOLO si el usuario pide un rango o momento del día (ej: "en la tarde", "por la mañana").
+           - "mañana" -> "08:00"
+           - "tarde" -> "12:00"
+           - "final del día" -> "17:00"
+        4. IMPORTANTE: Si hay 'min_time', el campo 'time' DEBE ser null. No inventes horas.
+
+        CONTEXTO ACTUAL:
+        - El usuario ya estaba consultando para la fecha: {fecha_actual_contexto if fecha_actual_contexto else 'No definida'}.
+        - Si el usuario no menciona una fecha nueva (ej: solo dice "y en la tarde"), mantén la fecha del contexto.
+
+        RESPONDE SOLO JSON:
+        {{
+          "date": "YYYY-MM-DD o null", 
+          "time": "HH:MM o null", 
+          "min_time": "HH:MM o null"
+        }}"""
+
+    try:
+        # Usamos los últimos 4 mensajes para contexto
+        history_text = "\n".join([f"{m['role']}: {m['content']}" for m in messages[-4:]])
+        
+        response = client_ai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Historial reciente:\n{history_text}\n\nRespuesta del usuario: {last_msg}"}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0
+        )
+
+        data = json.loads(response.choices[0].message.content)
+        
+        final_time = data.get("time")
+        final_min_time = data.get("min_time")
+        final_date = data.get("date")
+
+        # 2. Lógica de Limpieza Proactiva (SRP)
+        if final_min_time:
+            print(f"🕒 [Extractor] Detectado rango '{last_msg}'. Limpiando hora específica.")
+            final_time = None
+        
+        # Si el usuario elige una hora específica, limpiamos el min_time para que no afecte futuras búsquedas
+        if final_time:
+            final_min_time = None
+
+    except Exception as e:
+        print(f"❌ Error en Appointments Extractor: {e}")
+        final_time, final_min_time, final_date = None, None, None
+
+    print(f"🕵️ [Extractor] Resultado -> Fecha: {final_date}, Hora: {final_time}, MinTime: {final_min_time}")
+
+    # 3. Retornamos el estado actualizado (Priorizando la fecha extraída)
+    return {
+        **state, 
+        "appointment_time": final_time,
+        "appointment_date": final_date if final_date else state.get("appointment_date"),
+        "min_time": final_min_time
+    }

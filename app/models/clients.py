@@ -1,43 +1,34 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-
-# Importamos Base desde tu configuración de base de datos
-# Asegúrate de que en app/database.py tengas: Base = declarative_base()
 from app.models.base import Base 
 
 class Client(Base):
     __tablename__ = "clients"
 
     id = Column(Integer, primary_key=True, index=True)
+    business_id = Column(Integer, default=1) 
+
     full_name = Column(String, nullable=False)
-    
-    # index=True y unique=True para que las búsquedas por WhatsApp sean instantáneas 🚀
     phone = Column(String, unique=True, index=True, nullable=False)
     email = Column(String, nullable=True)
+    notes = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
     
-    # --- MEMORIA DEL AGENTE (Lo que evita el bucle) ---
-    # Guardamos el ID del servicio que el usuario eligió pero aún no agenda
-    current_service_id = Column(Integer, ForeignKey("services.id"), nullable=True)
-    
-    # --- ANALÍTICA Y ORIGEN ---
-    # Para saber si lo creó la IA o tú manualmente en el panel
+    # 🧠 CAMPOS VITALES PARA LA IA (ValeriaMaster)
+    # Al ponerlos como Columnas normales, la IA puede leerlos/escribirlos sin error
+    current_service_id = Column(Integer, nullable=True) 
     source = Column(String, default="ia", nullable=False) 
     
-    # Campo flexible para verticalización (notas extras del negocio)
-    metadata_json = Column(JSONB, default={})
+    # Aquí es donde la IA suele guardar contexto adicional
+    metadata_json = Column(JSONB, server_default='{}', nullable=False)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
-    # --- RELACIONES --- [cite: 2026-02-13]
-    # Importante: Usamos el nombre del modelo como string "Appointment" 
-    # para evitar el error de importación circular que tenías.
+    # Relación con citas para que Valeria pueda agendar
     appointments = relationship("Appointment", back_populates="client")
-    
-    # Relación para acceder rápido al servicio que tiene pendiente
-    current_service = relationship("Service")
 
     def __repr__(self):
-        return f"<Client(full_name='{self.full_name}', phone='{self.phone}', source='{self.source}')>"
+        return f"<Client(id={self.id}, name='{self.full_name}')>"

@@ -1,132 +1,105 @@
-"""
-AppointmentsOrchestrator — Dominio: Appointments
-Responsabilidad: Gestionar la confirmación final de citas.
-Si falta la hora, usa IA de rescate, registra el fallo para aprendizaje
-y detecta si debe devolver el flujo al Master/Booking para cambiar de fecha.
-"""
-
 import os
 from datetime import datetime
 from sqlalchemy.orm import Session
-from openai import OpenAI
-
 from app.agents.appointments.graph_builder import create_appointments_graph
+from app.models.appointments import Appointment, AppointmentSource 
 from app.models.services import Service
-from app.models.learning import AiLearningLog
-
-# Inicializamos el cliente de OpenAI
-client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class AppointmentsOrchestrator:
 
     def process(self, db: Session, state: dict):
         service_name = state.get("service_type")
+        phone = state.get("phone")
         
-        # 1. Capturar el mensaje real del usuario (el último mensaje del rol 'user')
-        user_msg = next(
-            (m["content"] for m in reversed(state["messages"]) if m["role"] == "user"), 
-            "Mensaje no detectado"
-        )
+        # 1. PREPARACIÓN Y VALIDACIÓN DEL SERVICIO
+        srv = db.query(Service).filter(Service.id == state.get("service_id")).first()
+        if not srv:
+            srv = db.query(Service).filter(Service.name == service_name).first()
+        
+        if not srv:
+            return "Lo siento, no pude identificar el servicio. ¿Empezamos de nuevo?", state["messages"]
 
-        # 2. Inyectar service_id y duración para el flujo técnico del grafo
-        srv = db.query(Service).filter(Service.name == service_name).first()
-        if srv:
-            state["service_id"] = srv.id
-            state["service_duration_minutes"] = srv.duration_minutes
+        # Enriquecemos el estado con datos técnicos
+        state["service_id"] = srv.id
+        state["service_duration_minutes"] = srv.duration_minutes
+        
+        # 🛡️ LIMPIEZA DE FECHA (Evita el bucle del 17/02 si hoy es 18/02)
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        current_date = state.get("appointment_date")
+        
+        if current_date and current_date < today_str:
+            print(f"♻️ [Orchestrator] Fecha pasada detectada ({current_date}). Reseteando a hoy.")
+            state["appointment_date"] = today_str
 
-        # 3. Ejecutar grafo técnico (extractor -> confirmation)
-        graph = create_appointments_graph(db)
-        final_state = graph.invoke(state)
+        # 🤖 INYECCIÓN DEL ORIGEN (Tu requerimiento principal)
+        # Inyectamos el valor string para que Neon lo guarde sin errores de Enum
+        state["source"] = AppointmentSource.IA.value 
 
-        time_str = final_state.get("appointment_time")
-        status   = final_state.get("confirmation_status")
-        appt_id  = final_state.get("appointment_id")
-
-        # Sincronizamos la hora detectada
-        state["appointment_time"] = time_str
-
-        # Formatear fecha para la respuesta de Valeria
-        date_str = state.get("appointment_date", "")
+        # 2. EJECUCIÓN DEL GRAFO DE AGENDAMIENTO
+        status = None
         try:
-            date_fmt = datetime.strptime(date_str, "%Y-%m-%d").strftime("%d/%m/%Y")
-        except Exception:
-            date_fmt = date_str
-
-        # --- 🧠 LÓGICA DE RESCATE Y APRENDIZAJE ---
-        if not time_str:
-            # Valeria intenta responder de forma natural
-            system_prompt = (
-                f"Eres Valeria de 'Beauty Pro'. El cliente está agendando {service_name} el {date_fmt}.\n"
-                "No se detectó una hora específica. Responde de forma breve (máx 20 palabras).\n"
-                "Si el cliente menciona otro día o franja horaria, confirma que vas a revisar la disponibilidad."
-            )
-
-            response_ia = client_ai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "system", "content": system_prompt}] + state["messages"],
-                temperature=0.2 
-            )
-            res = response_ia.choices[0].message.content
-
-            # --- 📊 LOG PARA APRENDIZAJE (Neon) ---
-            try:
-                new_log = AiLearningLog(
-                    phone=state.get("phone", "unknown"),
-                    module_name="appointments",
-                    user_message=user_msg,
-                    ai_response=res,
-                    is_resolved=False,
-                    notes=f"Fallo extracción hora. Estado fecha: {date_str}"
-                )
-                db.add(new_log)
-                db.commit()
-            except Exception as e:
-                db.rollback()
-                print(f"❌ Error en log: {e}")
-
-            # --- 🔄 REDIRECCIÓN ESTRATÉGICA ---
-            # Si el usuario menciona un cambio de tiempo, reseteamos para que el Master lo mande a Booking
-            msg_clean = user_msg.lower()
-            trigger_words = ["mañana", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo", "día", "cambiar"]
+            db.commit() 
+            graph = create_appointments_graph(db)
+            final_state = graph.invoke(state)
             
-            if any(word in msg_clean for word in trigger_words):
-                print(f"🔄 [Orchestrator] Detectado posible cambio de fecha. Reseteando para volver a Booking.")
-                state["appointment_date"] = None # Esto fuerza al Master a re-evaluar el día
-                state["slots_shown"] = False
+            status = final_state.get("confirmation_status")
+            apt_id = final_state.get("appointment_id")
+            
+            # Actualizamos el estado con lo que devolvió el grafo
+            if apt_id or status == "confirmed":
+                status = "confirmed"
+            
+        except Exception as e:
+            print(f"🔥 [Appointments] Error en Grafo: {e}")
+            db.rollback()
 
-            # Lógica de salida por despedida
-            if any(k in msg_clean for k in ["adios", "chao", "gracias", "olvidalo"]):
-                state["appointment_date"] = None
-                state["slots_shown"] = False
+        # 3. VERIFICACIÓN DE RESPALDO (Falso Negativo Recovery)
+        if status != "confirmed":
+            print(f"🕵️ [Appointments] Verificando DB para el teléfono {phone}...")
+            last_apt = db.query(Appointment).filter(
+                Appointment.client_phone == phone
+            ).order_by(Appointment.id.desc()).first()
 
-        # --- 4. LÓGICA DE ESTADOS DEL GRAFO ---
-        elif status == "confirmed":
-            res = (
-                f"¡Todo listo! Tu cita de *{service_name}* quedó agendada para el "
-                f"{date_fmt} a las {time_str} 🎉 (Ref: #{appt_id})"
-            )
-            state["appointment_date"]  = None
-            state["appointment_time"]  = None
-            state["slots_shown"]       = False
+            if last_apt and last_apt.service_id == srv.id:
+                if last_apt.created_at.date() == datetime.now().date():
+                    print(f"✅ [Appointments] Cita #{last_apt.id} encontrada en Neon.")
+                    status = "confirmed"
+
+        # 4. GENERACIÓN DE RESPUESTA AL USUARIO
+        time_str = state.get("appointment_time")
+        date_raw = state.get("appointment_date", today_str)
+        date_fmt = self._format_date(date_raw)
+
+        if status == "confirmed":
+            res = f"¡Excelente noticia! 🎉 Tu cita para *{srv.name}* ha sido agendada con éxito para el {date_fmt} a las {time_str}. ¡Te esperamos!"
             state["booking_confirmed"] = True
-
-        elif status == "conflict":
-            reason = final_state.get("conflict_reason", "")
-            res = f"Ese horario ya no está disponible ({reason}). ¿Quieres elegir otro?"
-            state["slots_shown"] = True
-
-        elif status == "no_collaborator":
-            res = "No tenemos profesionales libres a esa hora. ¿Probamos con otro horario?"
-            state["slots_shown"] = True
-
-        elif status == "missing_data":
-            res = f"Me falta información. ¿Para qué día querías la cita de *{service_name}*?"
-            state["slots_shown"] = False
-
         else:
-            res = "Hubo un problema al procesar la cita. ¿Qué horario prefieres?"
-            state["slots_shown"] = True
+            # Caso de Fallo (Búsqueda de alternativas)
+            print(f"⚠️ [Appointments] Sin cupo para {time_str} en {date_raw}. Buscando huecos...")
+            state["appointment_time"] = None 
+            state["booking_confirmed"] = False
+            
+            from app.agents.booking.orchestrator import BookingOrchestrator
+            booking_engine = BookingOrchestrator()
+            res_booking, _ = booking_engine.process_booking(db, state)
+            
+            res = (
+                f"Me temo que para el {date_fmt} a esa hora no tengo disponibilidad. 😅\n\n"
+                f"Pero aquí tienes otros horarios disponibles:\n"
+                f"✨ {res_booking}\n\n"
+                "¿Te sirve alguno o prefieres otro día?"
+            )
 
-        # Guardar respuesta final en el historial
-        state["messages"].append({"role": "assistant", "content": res})
-        return res, state["messages"]
+        return self._finalize_response(state, res)
+
+    def _format_date(self, date_str):
+        try:
+            return datetime.strptime(date_str, "%Y-%m-%d").strftime("%d/%m/%Y")
+        except: 
+            return date_str
+
+    def _finalize_response(self, state, response_text):
+        if "messages" not in state:
+            state["messages"] = []
+        state["messages"].append({"role": "assistant", "content": response_text})
+        return response_text, state["messages"]

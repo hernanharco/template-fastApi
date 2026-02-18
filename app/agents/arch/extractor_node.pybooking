@@ -1,0 +1,70 @@
+import os
+import json
+from datetime import datetime, timedelta
+from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
+client_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+def extractor_node(state: dict):
+    user_message = state["messages"][-1]["content"] if state.get("messages") else ""
+    
+    # 1. OBTENER FECHAS DE REFERENCIA (SRP: El código calcula, la IA interpreta)
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    current_day_name = now.strftime("%A") # Para que sepa si es lunes, martes...
+
+    print(f"🕵️ [EXTRACTOR] Analizando: '{user_message}'")
+
+    system_prompt = f"""
+    Eres un experto en extracción de datos para un salón de belleza. 
+    Tu misión es normalizar la información.
+
+    REFERENCIAS TEMPORALES:
+    - Hoy es: {today_str} ({current_day_name})
+    - Mañana es: {tomorrow_str}
+
+    REGLAS DE ORO PARA 'date':
+    1. Si el usuario dice "mañana", usa "{tomorrow_str}".
+    2. Si el usuario dice "hoy", usa "{today_str}".
+    3. Si el usuario NO menciona una fecha nueva, devuelve null (No asumas la del contexto).
+
+    REGLAS DE ORO PARA 'time':
+    1. Formato 24h (HH:MM). Ej: "3 de la tarde" -> "15:00".
+    2. "2" sin contexto -> "14:00".
+
+    REGLAS PARA 'min_time':
+    - 'tarde': "14:00", 'mañana': "08:00".
+
+    Responde ÚNICAMENTE JSON:
+    {{
+      "date": "YYYY-MM-DD o null",
+      "time": "HH:MM o null",
+      "service_type": "nombre del servicio o null",
+      "min_time": "HH:MM o null"
+    }}
+    """
+
+    try:
+        # 2. SEPARACIÓN DE CONTEXTO (SRP: No mezclar memoria con input nuevo)
+        contexto_previo = f"Servicio actual: {state.get('service_type')}. Fecha en memoria: {state.get('appointment_date')}"
+        
+        response = client_ai.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0, # Crucial: 0 para que no invente
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"{contexto_previo}\n\nMensaje del usuario: {user_message}"}
+            ],
+            response_format={ "type": "json_object" }
+        )
+        
+        extracted = json.loads(response.choices[0].message.content)
+        print(f"🤖 [IA Extractor] Normalizado: {extracted}")
+        return extracted
+
+    except Exception as e:
+        print(f"🔥 [EXTRACTOR ERROR] Fallo al extraer: {e}")
+        return {"date": None, "time": None, "service_type": None, "min_time": None}

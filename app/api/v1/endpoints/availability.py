@@ -22,7 +22,7 @@ router = APIRouter()
 def read_availability(
     *,
     db: Session = Depends(get_db),
-    date: str = Query(..., description="Fecha en formato YYYY-MM-DD", example="2026-02-14"),
+    date: str = Query(..., description="Fecha en formato YYYY-MM-DD", examples=["2026-02-14"]),
     service_id: int = Query(..., description="ID del servicio que se desea reservar"),
     collaborator_id: Optional[int] = Query(None, description="ID opcional de un profesional específico")
 ):

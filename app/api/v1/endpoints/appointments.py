@@ -4,8 +4,8 @@ Este módulo contiene todos los endpoints CRUD, el sistema de disponibilidad
 y la vinculación automática con el dominio de clientes.
 """
 
+from datetime import date, datetime, time
 from typing import List, Optional
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
@@ -15,7 +15,7 @@ from app.db.session import get_db
 from app.models.appointments import Appointment, AppointmentStatus
 from app.models.services import Service
 from app.models.collaborators import Collaborator
-from app.models.clients import Client  # 💡 Importante para la vinculación
+from app.models.clients import Client
 from app.schemas.appointments import (
     AppointmentCreate, AppointmentRead, AppointmentUpdate, 
     TimeSlot, AvailableSlotsResponse
@@ -24,9 +24,9 @@ from app.utils.availability import (
     get_available_slots, is_valid_appointment_time
 )
 
-# Creamos el router de FastAPI para este dominio
 router = APIRouter()
 
+# --- 🟢 ENDPOINTS DE ESCRITURA ---
 
 @router.post("/", response_model=AppointmentRead, status_code=status.HTTP_201_CREATED)
 async def create_appointment(
@@ -34,129 +34,103 @@ async def create_appointment(
     db: Session = Depends(get_db)
 ):
     """
-    Crea una nueva cita. 
-    1. Valida el servicio y disponibilidad.
-    2. Busca o crea al cliente automáticamente por su teléfono.
-    3. Vincula la cita al cliente y al colaborador.
+    Crea una nueva cita vinculando automáticamente al cliente por teléfono.
     """
-    
-    # 1. Validar que el Servicio exista y esté activo
+    # 1. Validar Servicio
     service = db.query(Service).filter(
         and_(Service.id == appointment_data.service_id, Service.is_active == True)
     ).first()
     if not service:
         raise HTTPException(status_code=400, detail="Servicio no encontrado o inactivo")
 
-    # 2. Lógica de asignación inteligente de Colaborador
+    # 2. Asignación de Colaborador
     final_collaborator_id = appointment_data.collaborator_id
-
     if not final_collaborator_id:
-        # Si no se envió ID, buscamos el primer profesional disponible para ese horario
         from app.utils.availability import find_available_collaborator
         final_collaborator_id = find_available_collaborator(
-            db, 
-            appointment_data.start_time, 
-            appointment_data.end_time,
-            appointment_data.service_id
+            db, appointment_data.start_time, appointment_data.end_time, appointment_data.service_id
         )
-        
         if not final_collaborator_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No hay profesionales disponibles para este horario."
-            )
-    else:
-        # Si se envió ID, validamos que el colaborador exista y esté activo
-        collaborator = db.query(Collaborator).filter(
-            and_(Collaborator.id == final_collaborator_id, Collaborator.is_active == True)
-        ).first()
-        if not collaborator:
-            raise HTTPException(status_code=400, detail="Colaborador no encontrado")
-
-    # 3. Validar conflictos de horario (Solapamientos)
-    is_valid, error_message = is_valid_appointment_time(
-        db, 
-        final_collaborator_id,
-        appointment_data.start_time,
-        appointment_data.end_time
-    )
+            raise HTTPException(status_code=400, detail="No hay profesionales disponibles")
     
+    # 3. Validar Conflictos
+    is_valid, error = is_valid_appointment_time(db, final_collaborator_id, appointment_data.start_time, appointment_data.end_time)
     if not is_valid:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=error_message)
+        raise HTTPException(status_code=409, detail=error)
 
-    # --- 🚀 4. GESTIÓN AUTOMÁTICA DEL CLIENTE (BUSCAR O CREAR) ---
-    # Buscamos en la base de datos si ya existe un cliente con ese teléfono
+    # 4. Gestión de Cliente (Buscar o Crear)
     client = None
     if appointment_data.client_phone:
         client = db.query(Client).filter(Client.phone == appointment_data.client_phone).first()
 
     if not client:
-        # Si el cliente no existe, lo creamos desde cero
         client = Client(
             full_name=appointment_data.client_name,
             phone=appointment_data.client_phone,
-            email=appointment_data.client_email,
-            metadata_json={} # Campo JSONB de Postgres para flexibilidad futura
+            email=appointment_data.client_email
         )
         db.add(client)
-        # Usamos flush() para que la DB le asigne un ID, pero aún no confirma la transacción
         db.flush() 
     else:
-        # Si el cliente existe, actualizamos su nombre o email si han cambiado
         client.full_name = appointment_data.client_name
         if appointment_data.client_email:
             client.email = appointment_data.client_email
 
-    # 5. Crear la Cita final vinculada
-    # Convertimos el esquema a dict excluyendo el ID de colaborador original si era nulo
+    # 5. Crear Cita
     appointment_dict = appointment_data.dict(exclude={'collaborator_id'})
-    
     new_appointment = Appointment(
         **appointment_dict,
         collaborator_id=final_collaborator_id,
-        client_id=client.id,  # 👈 Aquí vinculamos la cita al Cliente real
+        client_id=client.id,
         status=AppointmentStatus.SCHEDULED
     )
     
     try:
         db.add(new_appointment)
-        db.commit() # Guardamos Cliente + Cita en una sola operación atómica
+        db.commit()
         db.refresh(new_appointment)
         return new_appointment
     except Exception as e:
-        db.rollback() # Si algo falla, no se crea ni el cliente ni la cita
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail=f"Error al procesar la reserva: {str(e)}"
-        )
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
+# --- 🔵 ENDPOINTS DE LECTURA (FILTRADO) ---
 
 @router.get("/", response_model=List[AppointmentRead])
 async def get_appointments(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    date_filter: Optional[date] = Query(None, alias="date", description="Filtrar por día (YYYY-MM-DD)"),
     collaborator_id: Optional[int] = None,
     service_id: Optional[int] = None,
     status: Optional[AppointmentStatus] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db)
 ):
+    """
+    Obtiene lista de citas. 
+    Eliminamos el filtro is_active porque no existe en el modelo actual.
+    """
+    # 🎯 CAMBIO AQUÍ: Quitamos .filter(Appointment.is_active == True)
     query = db.query(Appointment)
     
+    if date_filter:
+        start_day = datetime.combine(date_filter, time.min)
+        end_day = datetime.combine(date_filter, time.max)
+        query = query.filter(Appointment.start_time.between(start_day, end_day))
+    elif date_from or date_to:
+        if date_from: query = query.filter(Appointment.start_time >= date_from)
+        if date_to: query = query.filter(Appointment.start_time <= date_to)
+
     if collaborator_id:
         query = query.filter(Appointment.collaborator_id == collaborator_id)
     if service_id:
         query = query.filter(Appointment.service_id == service_id)
     if status:
         query = query.filter(Appointment.status == status)
-    if date_from:
-        query = query.filter(Appointment.start_time >= date_from)
-    if date_to:
-        query = query.filter(Appointment.start_time <= date_to)
     
-    return query.order_by(Appointment.start_time.desc()).offset(skip).limit(limit).all()
-
+    return query.order_by(Appointment.start_time.asc()).offset(skip).limit(limit).all()
 
 @router.get("/{appointment_id}", response_model=AppointmentRead)
 async def get_appointment(appointment_id: int, db: Session = Depends(get_db)):
@@ -165,6 +139,7 @@ async def get_appointment(appointment_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Cita no encontrada")
     return appointment
 
+# --- 🟡 ENDPOINTS DE ACTUALIZACIÓN Y ELIMINACIÓN ---
 
 @router.put("/{appointment_id}", response_model=AppointmentRead)
 async def update_appointment(
@@ -176,8 +151,7 @@ async def update_appointment(
     if not appointment:
         raise HTTPException(status_code=404, detail="Cita no encontrada")
     
-    # Validar conflictos si cambia el horario o profesional
-    if appointment_data.start_time or appointment_data.end_time or appointment_data.collaborator_id:
+    if appointment_data.start_time or appointment_data.collaborator_id:
         new_start = appointment_data.start_time or appointment.start_time
         new_end = appointment_data.end_time or appointment.end_time
         new_collab = appointment_data.collaborator_id or appointment.collaborator_id
@@ -194,7 +168,6 @@ async def update_appointment(
     db.refresh(appointment)
     return appointment
 
-
 @router.delete("/{appointment_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_appointment(
     appointment_id: int,
@@ -208,10 +181,13 @@ async def delete_appointment(
     if hard_delete:
         db.delete(appointment)
     else:
+        # Borrado lógico: cambiamos estado a cancelado o is_active a False
         appointment.status = AppointmentStatus.CANCELLED
+        appointment.is_active = False
     
     db.commit()
 
+# --- 🟣 DISPONIBILIDAD Y ESTADÍSTICAS ---
 
 @router.get("/availability/slots", response_model=AvailableSlotsResponse)
 async def get_available_slots_endpoint(
