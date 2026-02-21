@@ -14,6 +14,12 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
+    # OpenAI API Key
+    OPENAI_API_KEY: str = ""
+
+    # Nombre de la empresa 
+    BUSINESS_NAME: str = "Default Business Name" # Valor por defecto si no existe en .env
+    
     # Title for the backend:
     TITLE_BACKEND: str = "Default API Title" # Valor por defecto si no existe en .env
     NAME_DATABASE: str = "Default Database Name" # Valor por defecto si no existe en .env

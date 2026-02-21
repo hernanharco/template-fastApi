@@ -1,53 +1,76 @@
+import sys
 import os
 from dotenv import load_dotenv
+
+# 1. Carga de entorno y PATH
 load_dotenv()
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
-from app.agents.main_master import ValeriaMaster
 from app.models.clients import Client
-from sqlalchemy.orm.attributes import flag_modified
+# Asumimos que 'maria' es tu instancia que envuelve al grafo compilado
+from app.agents.core.maria_master import maria 
+from rich import print
+from rich.console import Console
+from langchain_core.messages import HumanMessage
 
+console = Console()
 
 def run_test():
-    orch    = ValeriaMaster()
-    db      = SessionLocal()
-    history = []
-
-    print("--- 📱 Sistema Real CoreAppointment (Con Memoria) ---")
-    phone = input("Introduce número de móvil: ")
-
-    # --- 🧹 RESET COMPLETO PARA DESARROLLO ---
-    reset = input("¿Deseas limpiar la memoria de este cliente para empezar de cero? (s/n): ")
-    if reset.lower() == 's':
-        cliente = db.query(Client).filter(Client.phone == phone).first()
-        if cliente:
-            cliente.current_service_id = None
-            # ✅ Limpiamos TODO el metadata_json — no solo last_interaction
-            cliente.metadata_json = {}
-            flag_modified(cliente, "metadata_json")
-            db.commit()
-            print(f"✅ Memoria limpiada en Neon para {phone}.")
-        else:
-            print("⚠️ Cliente no encontrado, se creará uno nuevo al hablar.")
-
+    db: Session = SessionLocal()
+    console.print("[bold cyan]--- 📱 Sistema MariaMaster (LangGraph + Neon) ---[/bold cyan]")
+    
     try:
+        # A. Identificación
+        phone = input("Introduce número de móvil (ej: 34600111222): ").strip()
+        if not phone:
+            console.print("[bold red]❌ Error: Debes introducir un número.[/bold red]")
+            return
+
+        # B. Limpieza de memoria (Neon Metadata)
+        clean = input("¿Deseas resetear la memoria en Neon? (s/n): ").lower()
+        if clean == 's':
+            cliente = db.query(Client).filter(Client.phone == phone).first()
+            if cliente:
+                # 1. Limpiamos mensajes
+                cliente.metadata_json = {"messages": []}
+                # 2. FIX: No usamos None para evitar el error de base de datos.
+                # Ponemos un valor temporal que obligue a Maria a preguntar.
+                cliente.full_name = "Usuario Nuevo" 
+                db.commit()
+                console.print(f"[green]✅ Memoria reseteada para {phone}[/green]")
+
+        console.print(f"\n[bold yellow]Conectado como: {phone}.[/bold yellow]")
+        console.print("[dim]Escribe 'salir' para terminar o 'estado' para ver el State actual.[/dim]")
+
+        # C. Bucle de conversación
         while True:
-            msg = input("\n👤 Tú: ")
+            user_input = input("\n👤 Tú: ").strip()
+            
+            if user_input.lower() in ["salir", "exit", "quit"]:
+                break
+            
+            if not user_input:
+                continue
 
-            if not msg.strip(): continue
-            if msg.lower() in ["salir", "exit"]: break
+            try:
+                # 🚀 PROCESAMIENTO
+                # Pasamos el db session y el teléfono. 
+                # Tu clase Maria debe usar el teléfono como thread_id internamente.
+                respuesta_maria = maria.process(db, phone, user_input)
+                
+                # Mostramos la respuesta con estilo
+                print(f"\n🤖 [bold magenta]Maria:[/bold magenta] {respuesta_maria}")
+            
+            except Exception as e:
+                console.print(f"\n[bold red]❌ Error en el procesamiento:[/bold red] {e}")
+                import traceback
+                traceback.print_exc()
 
-            respuesta, history = orch.process(db, phone, msg, history)
-            print(f"🤖 Valeria: {respuesta}")
-
-    except Exception as e:
-        print(f"❌ Error durante el test: {e}")
-        import traceback
-        print(traceback.format_exc())
     finally:
         db.close()
-        print("\n--- 🔌 Conexión con Neon cerrada ---")
-
+        console.print("\n[blue]🔌 Conexión a Neon cerrada. ¡Prueba terminada![/blue]")
 
 if __name__ == "__main__":
     run_test()

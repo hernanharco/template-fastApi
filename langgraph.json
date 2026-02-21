@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {    
+    "mariamaster": "app.agents.core.maria_master:graph_maria"
+  },
+  "env": ".env"
+}
