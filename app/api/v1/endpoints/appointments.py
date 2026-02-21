@@ -5,10 +5,11 @@ y la vinculación automática con el dominio de clientes.
 """
 
 from datetime import date, datetime, time
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from typing import List, Optional, Dict
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, func
+from pydantic import BaseModel
 
 # Importaciones con rutas absolutas
 from app.db.session import get_db
@@ -246,3 +247,48 @@ async def get_appointments_summary(
         "cancelled": query.filter(Appointment.status == AppointmentStatus.CANCELLED).count(),
         "completion_rate": round((completed / total * 100) if total > 0 else 0, 2)
     }
+
+# 1. Definición primero
+class WeeklyCountResponse(BaseModel):
+    counts: Dict[str, int]
+
+@router.post("/summary", response_model=WeeklyCountResponse)
+async def get_appointments_summary(
+    dates: List[str] = Body(...), 
+    db: Session = Depends(get_db)
+):
+    """
+    🎯 Endpoint para el carrusel de Svelte.
+    Recibe una lista de fechas ["2026-02-20", "2026-02-21"]
+    y devuelve el conteo de citas de cada una.
+    """
+    
+    # 1. Convertimos los strings a fechas reales para filtrar en SQL
+    # Esto es vital para el aislamiento físico y seguridad en Neon [cite: 2026-02-18]
+    parsed_dates = []
+    for d in dates:
+        try:
+            parsed_dates.append(datetime.strptime(d, "%Y-%m-%d").date())
+        except ValueError:
+            continue # Ignoramos fechas mal formateadas
+
+    # 2. Consulta agrupada (GROUP BY)
+    # Pedimos a PostgreSQL que cuente por día
+    results = (
+        db.query(
+            func.date(Appointment.start_time).label("day"),
+            func.count(Appointment.id).label("total")
+        )
+        .filter(func.date(Appointment.start_time).in_(parsed_dates))
+        .group_by(func.date(Appointment.start_time))
+        .all()
+    )
+
+    # 3. Mapeamos los resultados a un diccionario
+    # Convertimos el objeto date de nuevo a string para el JSON
+    counts_map = {res.day.strftime("%Y-%m-%d"): res.total for res in results}
+
+    # 4. Aseguramos que todas las fechas solicitadas tengan un valor (aunque sea 0)
+    final_counts = {date: counts_map.get(date, 0) for date in dates}
+
+    return {"counts": final_counts}

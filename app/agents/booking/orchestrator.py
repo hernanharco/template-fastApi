@@ -1,81 +1,100 @@
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import List, Tuple, Dict
+import re
 from app.agents.booking.fuzzy_logic import service_fuzzy_match
-from app.agents.booking.nodes.availability_node import availability_node 
+from app.agents.booking.nodes.availability_node import availability_node
 
 class BookingOrchestrator:
     """
-    SRP: Orquestar el flujo de reserva y normalizar datos del servicio.
-    [cite: 2026-02-18] Optimización de UX con gap de 2 horas.
+    SRP: Orquestar el flujo de reserva, normalizar datos y gestionar el estado temporal.
     """
 
-    def process_booking(self, db: Session, state: dict, raw_message: str):
+    def _extract_relative_date(self, message: str) -> datetime:
+        """
+        SRP: ÚNICAMENTE extrae la fecha. No valida si es pasado o futuro.
+        """
+        today = datetime.now()
+        msg_lower = message.lower()
+
+        if "mañana" in msg_lower and "pasado" not in msg_lower:
+            return today + timedelta(days=1)
+        if "pasado mañana" in msg_lower:
+            return today + timedelta(days=2)
+
+        dias_semana = {
+            "lunes": 0, "martes": 1, "miércoles": 2, "miercoles": 2,
+            "jueves": 3, "viernes": 4, "sábado": 5, "sabado": 5, "domingo": 6,
+        }
+
+        for dia, target_weekday in dias_semana.items():
+            if dia in msg_lower:
+                current_weekday = today.weekday()
+                days_ahead = (target_weekday - current_weekday) % 7
+                if days_ahead == 0: days_ahead = 7
+                return today + timedelta(days=days_ahead)
+        return None
+
+    def process_booking(self, db: Session, state: dict, raw_message: str) -> Tuple[str, List]:
         print(f"\n--- 🧬 [ORCH-BOOKING] Iniciando Orquestación ---")
         
-        # 1. Gestión de estados de transición (Soporte para tests)
-        # Si ya hay fecha o el mensaje indica "lleno", reseteamos para buscar el día siguiente.
-        if state.get("appointment_date") or "lleno" in raw_message.lower():
-            state["today_full"] = True
-            state["appointment_date"] = None 
-            print("🚩 [ORCH-BOOKING] Transición detectada: Buscando cupos para mañana.")
+        # 1. CAPTURA DE HORA
+        time_match = re.search(r"(\d{1,2})[:.](\d{2})", raw_message)
+        if time_match:
+            hour, minute = time_match.groups()
+            state["appointment_time"] = f"{hour.zfill(2)}:{minute}"
 
-        # 2. Normalización del Servicio (Fuzzy Matching)
-        # Priorizamos el servicio ya detectado, si no, usamos el mensaje crudo.
-        user_input = state.get("service_type") or raw_message
-        match = service_fuzzy_match(db, user_input)
+        # 2. CAPTURA DE FECHA
+        relative_date = self._extract_relative_date(raw_message)
+        if relative_date:
+            state["appointment_date"] = relative_date.strftime("%Y-%m-%d")
         
-        if match:
-            clean_name, srv_id = match
-            # IMPORTANTE: Guardamos el nombre oficial (ej: 'Cejas') para pasar los ASSERT
-            state["service_type"] = clean_name
-            state["service_id"] = srv_id
-            print(f"✨ [ORCH-BOOKING] Normalizado: '{user_input}' -> '{clean_name}'")
+        # 🛡️ ASEGURAR FECHA ACTUAL (Default si no hay una)
+        if not state.get("appointment_date"):
+            state["appointment_date"] = datetime.now().strftime("%Y-%m-%d")
 
-        # 3. Delegar la respuesta al nodo de disponibilidad
-        # [cite: 2026-02-18] Aislamiento físico en NEON.
+        # --- [NUEVO] 3. VALIDACIÓN PREVENTIVA DE PASADO ---
+        # Si ya tenemos fecha y hora, verificamos antes de seguir
+        if state.get("appointment_date") and state.get("appointment_time"):
+            try:
+                dt_str = f"{state['appointment_date']} {state['appointment_time']}"
+                appointment_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+                
+                if appointment_dt < datetime.now():
+                    print(f"⚠️ [ORCH-BOOKING] Bloqueo preventivo: Fecha pasada detectada.")
+                    res = (
+                        f"¡Ups! Me pides una cita para las {state['appointment_time']}, "
+                        "pero esa hora ya pasó. ¿Podrías decirme otra hora o para otro día?"
+                    )
+                    state["appointment_time"] = None # Limpiamos la hora para corregir
+                    return res, self._update_history(state, res)
+            except Exception as e:
+                print(f"Error validando tiempo: {e}")
+
+        # 4. NORMALIZACIÓN DEL SERVICIO (Fuzzy matching)
+        if not state.get("service_id"):
+            match = service_fuzzy_match(db, raw_message)
+            if match:
+                state["service_type"], state["service_id"] = match
+
+        # 5. LÓGICA DE DECISIÓN
+        has_time = state.get("appointment_time") is not None
+        has_service = state.get("service_id") is not None
+        
+        if has_time and has_service:
+            print(f"🚀 [ORCH-BOOKING] Todo listo. Pasando a confirmación.")
+            return self._handle_confirmation(db, state)
+
+        # Fallback: Consultar disponibilidad
+        print("🔍 [ORCH-BOOKING] Información incompleta. Consultando disponibilidad...")
         response_text = availability_node(db, state)
-        
         return response_text, self._update_history(state, response_text)
 
-    def filter_smart_slots(self, slots: list, limit: int = 2, gap_hours: int = 2):
-        """
-        SRP: Lógica matemática para espaciar las citas.
-        [cite: 2026-01-30] Selecciona opciones que tengan al menos X horas entre sí.
-        """
-        if not slots or len(slots) <= 1:
-            return slots
-
-        selected = [slots[0]]
-        for slot in slots[1:]:
-            if len(selected) >= limit:
-                break
-            
-            last_time = selected[-1]['start_time']
-            current_time = slot['start_time']
-            
-            # Diferencia en horas
-            diff = (current_time - last_time).total_seconds() / 3600
-            
-            if diff >= gap_hours:
-                selected.append(slot)
-        
-        return selected
-
-    def _fmt_date(self, date_str: str) -> str:
-        """
-        SRP: Formatear fechas ISO a formato legible DD/MM/YYYY.
-        [cite: 2026-01-30] Explicación: Requerido por los tests para validar la salida al usuario.
-        """
-        try:
-            # Limpiamos si viene con 'Z' de UTC
-            clean_date = date_str.replace('Z', '+00:00')
-            dt = datetime.fromisoformat(clean_date)
-            return dt.strftime("%d/%m/%Y")
-        except Exception as e:
-            print(f"⚠️ [ORCH-BOOKING] Error formateando fecha: {e}")
-            return date_str
+    def _handle_confirmation(self, db: Session, state: dict) -> Tuple[str, List]:
+        from app.agents.appointments.orchestrator import AppointmentsOrchestrator
+        return AppointmentsOrchestrator().process(db, state)
 
     def _update_history(self, state: dict, response: str) -> list:
-        history = state.get("messages", [])
-        history.append({"role": "assistant", "content": response})
-        return history
+        if "messages" not in state: state["messages"] = []
+        state["messages"].append({"role": "assistant", "content": response})
+        return state["messages"]

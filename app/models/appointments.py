@@ -49,7 +49,7 @@ class Appointment(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
     client = relationship("Client", back_populates="appointments")
-    service = relationship("Service", back_populates="appointments")
+    service = relationship("Service", back_populates="appointments") # esta forma podemos traer la info
     collaborator = relationship("Collaborator", back_populates="appointments")
 
     def __repr__(self):

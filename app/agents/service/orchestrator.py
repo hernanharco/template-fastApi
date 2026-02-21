@@ -1,75 +1,59 @@
-import os
 from sqlalchemy.orm import Session
-from app.models.services import Service
+from app.models.services import Service 
 
 class ServiceOrchestrator:
     """
-    SRP: Gestionar la información y visualización del catálogo de servicios.
-    [cite: 2026-02-18] Persistencia unificada en NEON con trazabilidad.
+    SRP: Responsable exclusivamente de consultar y formatear 
+    la información del catálogo de servicios desde NEON.
     """
 
     def get_catalog_summary(self, db: Session) -> str:
         """
-        Genera una lista amigable para el saludo proactivo del Master.
-        [cite: 2026-02-18] Menos infraestructura, más valor.
+        Consulta la tabla de servicios y devuelve un resumen visual.
+        Se usa tanto en saludos como en consultas directas.
         """
-        print("📡 [SERVICE-ORCH] Generando resumen rápido del catálogo...")
         try:
             services = db.query(Service).filter(Service.is_active == True).all()
+            
             if not services:
-                print("⚠️ [SERVICE-ORCH] Sin servicios para el resumen.")
-                return "Actualmente estamos actualizando nuestros servicios. 🌸"
-
-            # Emojis para que la interacción no sea 'al aire'
-            icons = {
-                "cejas": "👁️", "pestañas": "✨", "manicura": "💅", 
-                "pedicura": "👣", "facial": "🧖‍♀️", "masaje": "💆‍♂️"
-            }
+                return "Actualmente no tenemos servicios disponibles."
 
             lines = []
             for s in services:
-                emoji = next((v for k, v in icons.items() if k in s.name.lower()), "🌸")
-                # Incluimos el precio para que el usuario elija con info completa
-                precio = f" - *${s.price}*" if hasattr(s, 'price') and s.price else ""
-                lines.append(f"{emoji} **{s.name}**{precio}")
+                name_low = s.name.lower()
+                # Selección dinámica de iconos para verticalización
+                icon = "✨"
+                if "manicure" in name_low or "uñas" in name_low: icon = "💅"
+                elif "pedicure" in name_low: icon = "👣"
+                elif "ceja" in name_low or "pestaña" in name_low: icon = "👁️"
+                elif "corte" in name_low or "pelo" in name_low: icon = "💇"
+                
+                lines.append(f"{icon} *{s.name}* ")
             
             return "\n".join(lines)
         except Exception as e:
-            print(f"❌ [SERVICE-ORCH] Error en resumen: {str(e)}")
-            return "Nuestros servicios de estética profesional."
+            print(f"❌ [SERVICE-ORCH] Error al leer catálogo: {e}")
+            return "No pude cargar el catálogo en este momento."
 
-    def process_service(self, db: Session, state: dict):
+    def process_service_query(self, db: Session, state: dict) -> tuple[str, list]:
         """
-        Lógica completa cuando el usuario pide explícitamente ver el catálogo.
+        Método principal llamado por el Master cuando el usuario 
+        pregunta específicamente por precios o servicios.
         """
-        print("\n" + "="*50)
-        print("🔍 [SERVICE-ORCH] Iniciando flujo de ayuda detallada...")
+        print(f"📡 [SERVICE-ORCH] Procesando consulta de catálogo para {state.get('phone')}")
         
-        requested = state.get("service_type")
-        print(f"📥 [SERVICE-ORCH] Input: '{requested}'")
+        user_name = state.get("user_name", "cliente")
+        catalog = self.get_catalog_summary(db)
+        msgs = state.get("messages", [])
 
-        # Reutilizamos la lógica del summary para mantener consistencia
-        servicios_list = self.get_catalog_summary(db)
-
-        # Lógica de Mensajería Proactiva
-        if requested and requested != "not_found":
-            print(f"💡 [SERVICE-ORCH] Corrección de: '{requested}'")
-            intro = f"No logré encontrar '{requested}' en nuestro sistema, pero mira lo que tenemos para ti: 😉"
-        else:
-            print("👋 [SERVICE-ORCH] Saludo inicial de catálogo.")
-            intro = "¡Qué gusto saludarte! 👋 Aquí tienes nuestros servicios disponibles:"
-
-        response = (
-            f"{intro}\n\n"
-            f"{servicios_list}\n\n"
-            "¿Cuál de estos te gustaría elegir hoy?"
+        # Construimos la respuesta enfocada en el catálogo
+        res = (
+            f"¡Claro que sí, {user_name}! Aquí tienes nuestra lista de servicios y precios:\n\n"
+            f"{catalog}\n\n"
+            "¿Te gustaría agendar una cita para alguno de ellos?"
         )
 
-        # Actualización de historia
-        history = state.get("messages", [])
-        history.append({"role": "assistant", "content": response})
+        # Actualizamos el historial de mensajes
+        msgs.append({"role": "assistant", "content": res})
         
-        print("📤 [SERVICE-ORCH] Respuesta generada con éxito.")
-        print("="*50 + "\n")
-        
-        return response, history
+        return res, msgs
