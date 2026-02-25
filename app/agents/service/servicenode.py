@@ -46,6 +46,7 @@ def service_expert_node(state: AgentState) -> dict:
             res = f"¡Excelente elección! He anotado que te interesa *{name}*. ✨\n\n¿Para qué día y hora te gustaría agendar tu cita?"
             return {
                 "messages": [AIMessage(content=res)],
+                "service_id": srv_id,  # <--- ¡ESTO ES VITAL! Para que el estado lo guarde
                 "current_node": "service_expert",
                 "last_updated": datetime.now().isoformat()
             }
@@ -69,7 +70,7 @@ def service_expert_node(state: AgentState) -> dict:
             f"¡Hola {nombre}! Qué gusto saludarte. ✨\n\n"
             f"Aquí tienes nuestra lista de servicios disponibles:\n\n"
             f"{catalog}\n\n"
-            "¿Cuál de estos te gustaría reservar hoy?"
+            "¿Cuál de estos te gustaría reservar?"
         )
         
         return {

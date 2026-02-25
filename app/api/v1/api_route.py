@@ -4,7 +4,7 @@ Este módulo agrupa todos los endpoints de la versión 1 de la API.
 """
 
 from fastapi import APIRouter
-from app.api.v1.endpoints import services, business_hours, collaborators, appointments, availability, ai_booking, clients, department
+from app.api.v1.endpoints import services, business_hours, collaborators, appointments, availability, ai_whatsapp, clients, department, notifications, reminders, telegram
 
 # 1. Creamos el router sin prefijo de versión.
 # El prefijo /api/v1 ya lo pone el main.py
@@ -50,9 +50,9 @@ api_router.include_router(
 
 # Dominio de ai-booking
 api_router.include_router(
-    ai_booking.router,
-    prefix="/ai_booking",
-    tags=["ai_booking"]
+    ai_whatsapp.router,
+    prefix="/ai_whatsapp",
+    tags=["ai_whatsapp"]
 )
 
 # Dominio de Clientes
@@ -62,9 +62,31 @@ api_router.include_router(
     tags=["clients"]
 )
 
-# DOminio de Departamentos
+# Dominio de Departamentos
 api_router.include_router(
     department.router,
     prefix="/department",
     tags=["department"]
 )
+
+# Dominio de Notificaciones
+api_router.include_router(
+    notifications.router,
+    prefix="/notifications",
+    tags=["notifications"]
+)
+
+# Dominio de Recordatorios
+api_router.include_router(
+    reminders.router,
+    prefix="/reminders",
+    tags=["reminders"]
+)
+
+# Dominio de Telegram
+api_router.include_router(
+    telegram.router,
+    prefix="/telegram",
+    tags=["telegram"]
+)
+

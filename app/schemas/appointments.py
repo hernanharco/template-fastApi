@@ -1,8 +1,9 @@
 import re
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 from pydantic import BaseModel, Field, field_validator, ValidationInfo, ConfigDict, computed_field
 from app.models.appointments import AppointmentStatus
+from app.schemas.department import Department as DepartmentSchema
 
 # Esta clase trae los campos de la relacion que este caso seria la service
 class ServiceReadSimple(BaseModel):
@@ -10,6 +11,7 @@ class ServiceReadSimple(BaseModel):
     name: str
     price: Optional[float] = None
     duration_minutes: Optional[int] = None
+    department: Optional[DepartmentSchema] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -38,6 +40,13 @@ class AppointmentBase(BaseModel):
 class AppointmentCreate(AppointmentBase):
     pass # No necesita validaciones adicionales
 
+class DepartmentReadSimple(BaseModel):
+    id: int
+    name: str
+    color: Optional[str] = "#6366f1"  # Color por defecto si es nulo
+
+    model_config = ConfigDict(from_attributes=True)
+
 # Esta clase es la que se devuelve cuando se lee una cita ejemplo cuando leemos la api se devuelven estos campos
 class AppointmentRead(BaseModel):
     # Campos que existen en la base de datos
@@ -49,7 +58,7 @@ class AppointmentRead(BaseModel):
     # 🎯 CAMBIO CLAVE: Agregamos el objeto service completo
     # Esto buscará la relación 'service' que definiste en tu modelo de SQLAlchemy
     service: Optional[ServiceReadSimple] = None
-
+    
     client_name: str
     client_phone: Optional[str] = None
     client_email: Optional[str] = None
@@ -106,3 +115,14 @@ class AvailableSlotsResponse(BaseModel):
     service_duration: int
     available_slots: List[TimeSlot]
     total_slots: int
+
+class DayCountResponse(BaseModel):
+    """
+    🎯 Soluciona el error de validación.
+    Define claramente que 'date' es un objeto de fecha (que Pydantic convertirá a string ISO)
+    y 'count' es un entero.
+    """
+    date: date
+    count: int
+
+    model_config = ConfigDict(from_attributes=True)

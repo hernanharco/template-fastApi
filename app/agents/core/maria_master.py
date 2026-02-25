@@ -1,51 +1,27 @@
-# app/agents/core/maria_master.py
 from typing import Annotated, Literal
+import re
 from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy.orm import Session
 from rich import print as rprint
 
-# Imports de tus otros módulos
 from app.agents.identity.identitynode import identity_node, AgentState
 from app.agents.service.servicenode import service_expert_node
+from app.agents.booking.booking_node import booking_expert_node
+from app.agents.appointments.appointments_node import appointment_confirmation_node
 from app.models.clients import Client
+from app.agents.core.extractor_master import extract_intent
 
 # ==========================================
-# PARTE 1: LÓGICA DEL GRAFO (Lo que me preguntaste)
+# PARTE 1: NODOS Y ROUTER
 # ==========================================
 
-# app/agents/core/maria_master.py
-
-def should_go_to_main(state: AgentState) -> Literal["service_expert", "identity", END]:
-    # 1. Obtener el nombre y el historial
-    nombre = state.get("client_name")
-    messages = state.get("messages", [])
-    
-    # 2. Lógica de Salto Proactivo:
-    # Si tenemos nombre Y el último mensaje es de la IA confirmando el registro...
-    # (Ej: "¡Mucho gusto, Hernán! Ya te registré...")
-    # Queremos que pase DIRECTO al experto de servicios en el mismo turno.
-    if nombre and nombre != "Nuevo Cliente":
-        # Si el último mensaje es del usuario, vamos a servicios.
-        # Si el último mensaje es de la IA pero es el de "Ya te registré", 
-        # forzamos una ejecución más hacia service_expert.
-        if messages and isinstance(messages[-1], HumanMessage):
-            return "service_expert"
-        
-        # Si el último mensaje fue la confirmación del nombre, saltamos a servicios
-        # para que el usuario no tenga que escribir "hola" de nuevo.
-        if "Ya te registré" in messages[-1].content:
-            return "service_expert"
-
-    # 3. Freno estándar: Si la IA ya habló y NO fue para registrar el nombre, terminamos.
-    if messages and isinstance(messages[-1], AIMessage):
-        return END
-
-    # 4. Si no hay nombre, seguimos en identidad
-    if not nombre or nombre == "Nuevo Cliente":
-        return "identity"
-    
-    return "service_expert"
+def farewell_node(state: AgentState) -> dict:
+    return {
+        "messages": [AIMessage(content="¡De nada! Aquí estaré si necesitas algo más. ¡Que tengas un gran día! ✨")],
+        "current_node": "farewell",
+        "service_id": None
+    }
 
 def main_assistant_node(state: AgentState) -> dict:
     return {
@@ -53,11 +29,50 @@ def main_assistant_node(state: AgentState) -> dict:
         "current_node": "main_assistant",
     }
 
+def should_go_to_main(state: AgentState) -> Literal["service_expert", "booking_expert", "appointment_confirmation", "farewell", "identity", END]:
+    nombre = state.get("client_name")
+    messages = state.get("messages", [])
+    
+    if not messages or isinstance(messages[-1], AIMessage): return END
+
+    last_user_msg = messages[-1].content.lower().strip()
+    if not nombre or nombre == "Nuevo Cliente": return "identity"
+    
+    history = messages[:-1][-5:] if len(messages) > 1 else []
+    intent = extract_intent(last_user_msg, history)
+    rprint(f"[bold magenta]🔮 IA ROUTER INTENT:[/bold magenta] {intent}")
+
+    # REGLA DE ORO: Manejo del "si" tras un rechazo
+    last_ai_msg = ""
+    for m in reversed(messages[:-1]):
+        if isinstance(m, AIMessage):
+            last_ai_msg = m.content.lower()
+            break
+
+    if ("lo siento" in last_ai_msg or "no me quedan" in last_ai_msg) and intent == "confirmation":
+        rprint("[bold yellow]🔄 ROUTER: El usuario aceptó buscar otro día. Volvemos a Booking.[/bold yellow]")
+        return "booking_expert"
+
+    if intent == "confirmation": return "appointment_confirmation"
+    if intent == "booking": return "booking_expert"
+    if intent in ["greeting", "info"]: return "service_expert"
+    if intent == "farewell": return "farewell"
+
+    return "service_expert"
+
+# ==========================================
+# PARTE 2: CONSTRUCCIÓN DEL GRAFO (DEFINICIÓN Y ASIGNACIÓN)
+# ==========================================
+
 def build_maria_master_graph():
     workflow = StateGraph(AgentState)
+    
     workflow.add_node("identity", identity_node)
     workflow.add_node("service_expert", service_expert_node)
+    workflow.add_node("booking_expert", booking_expert_node)
+    workflow.add_node("appointment_confirmation", appointment_confirmation_node)
     workflow.add_node("main_assistant", main_assistant_node)
+    workflow.add_node("farewell", farewell_node)
 
     workflow.add_edge(START, "identity")
     
@@ -66,75 +81,81 @@ def build_maria_master_graph():
         should_go_to_main,
         {
             "service_expert": "service_expert",
+            "booking_expert": "booking_expert",
+            "appointment_confirmation": "appointment_confirmation",
+            "farewell": "farewell",
             "identity": "identity",
             "main_assistant": "main_assistant",
             END: END,
         }
     )
     
-    workflow.add_edge("service_expert", "identity")
-    workflow.add_edge("main_assistant", "identity")
+    for node in ["service_expert", "booking_expert", "appointment_confirmation", "main_assistant", "farewell"]:
+        workflow.add_edge(node, END)
 
     return workflow.compile()
 
-# Instancia del motor del grafo
+# IMPORTANTE: Creamos la instancia del grafo ANTES de la clase que lo usa
 graph_maria = build_maria_master_graph()
 
-
 # ==========================================
-# PARTE 2: EL ORQUESTADOR (La clase MariaMaster)
+# PARTE 3: EL ORQUESTADOR
 # ==========================================
 
 class MariaMaster:
-    """
-    Esta clase es la que invoca al 'graph_maria' de arriba.
-    """
-    def process(self, db: Session, phone: str, user_input: str) -> str:
+    def process(self, db: Session, phone: str, user_input: str) -> dict:
         rprint(f"\n[bold blue]─── 🧠 PROCESANDO: {phone} ───[/bold blue]")
         
-        # 1. Neon: Buscar cliente
+        # 1. Obtener cliente
         client = db.query(Client).filter(Client.phone == phone).first()
         if not client:
-            client = Client(phone=phone, full_name="Nuevo Cliente", business_id=1, metadata_json={"messages": []})
-            db.add(client)
-            db.commit()
-            db.refresh(client)
+            client = Client(phone=phone, full_name="Nuevo Cliente", business_id=1, metadata_json={"messages": [], "service_id": None})
+            db.add(client); db.commit(); db.refresh(client)
 
-        # 2. Hidratar mensajes
+        # 2. Reconstruir historial de objetos de LangChain
         history = []
-        for m in client.metadata_json.get("messages", []):
-            if m["role"] == "user":
-                history.append(HumanMessage(content=m["content"]))
-            else:
-                history.append(AIMessage(content=m["content"]))
+        history_raw = client.metadata_json.get("messages", [])
+        for m in history_raw:
+            role_class = HumanMessage if m["role"] == "user" else AIMessage
+            history.append(role_class(content=m["content"]))
 
-        # 3. Preparar inputs para el grafo 'graph_maria'
-        nombre_actual = client.full_name if client.full_name != "Nuevo Cliente" else None
+        # ✨ EL PARCHE DE CONTEXTO:
+        # Creamos un string simple con los últimos 3-4 mensajes para que la IA del extractor tenga "memoria".
+        # Esto es lo que usará extract_booking_intent(user_msg, history_text)
+        context_string = "\n".join([f"{m['role']}: {m['content']}" for m in history_raw[-4:]])
+
+        # 3. Preparar entrada para el grafo
         inputs = {
             "messages": history + [HumanMessage(content=user_input)],
             "client_phone": phone,
-            "client_name": nombre_actual,
-            "business_slug": "la-mega-tienda"
+            "client_name": client.full_name if client.full_name != "Nuevo Cliente" else None,
+            "business_slug": "la-mega-tienda",
+            "service_id": client.metadata_json.get("service_id"),
+            "history_text": context_string # 👈 Pasamos el contexto aquí
         }
 
-        # 4. LANZAR EL GRAFO
-        rprint("[magenta]🚀 Entrando al Grafo...[/magenta]")
-        final_state = graph_maria.invoke(inputs, config={"configurable": {"thread_id": phone}})
+        try:
+            # 4. Ejecutar el Grafo
+            final_state = graph_maria.invoke(inputs, config={"configurable": {"thread_id": phone}})
+            
+            # 5. Persistencia de nombre
+            if final_state.get("client_name") and final_state["client_name"] != "Nuevo Cliente":
+                client.full_name = final_state["client_name"]
 
-        # 5. Guardar resultados en Neon
-        if final_state.get("client_name") and final_state["client_name"] != "Nuevo Cliente":
-            client.full_name = final_state["client_name"]
+            # 6. Guardar mensajes y service_id (Persistencia en Neon)
+            updated_msgs = [{"role": "user" if isinstance(m, HumanMessage) else "assistant", "content": m.content} for m in final_state["messages"]]
+            client.metadata_json = {
+                "messages": updated_msgs, 
+                "service_id": final_state.get("service_id")
+            }
+            db.commit()
 
-        updated_msgs = []
-        for m in final_state["messages"]:
-            role = "user" if isinstance(m, HumanMessage) else "assistant"
-            updated_msgs.append({"role": role, "content": m.content})
-        
-        client.metadata_json = {"messages": updated_msgs}
-        db.commit()
+            return {
+                "text": final_state["messages"][-1].content,
+                "has_changes": (final_state.get("current_node") == "appointment_confirmation")
+            }
+        except Exception as e:
+            rprint(f"[bold red]❌ ERROR EN EL GRAFO:[/bold red] {e}")
+            return {"text": "Lo siento, tuve un pequeño problema técnico. ¿Podemos intentarlo de nuevo?", "has_changes": False}
 
-        # 6. Devolver respuesta final
-        return final_state["messages"][-1].content
-
-# La instancia que usa el test_agent.py
 maria = MariaMaster()

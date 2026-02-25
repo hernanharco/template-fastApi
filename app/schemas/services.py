@@ -8,6 +8,8 @@ from typing import Optional
 from datetime import datetime
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
+from app.schemas.department import Department as DepartmentSchema
+
 class ServiceBase(BaseModel):
     """
     Campos base compartidos. 
@@ -52,9 +54,14 @@ class ServiceRead(ServiceBase):
     Incluye campos automáticos de la base de datos.
     """
     id: int
-    is_active: bool
-    created_at: datetime
-    updated_at: datetime
+    name: str
+    price: Optional[float] = None
+    duration_minutes: Optional[int] = None
+    # 🎯 AQUÍ ESTÁ EL TRUCO:
+    # Ahora el servicio incluye su departamento (y por ende, su color)
+    department: Optional[DepartmentSchema] = None 
+
+    model_config = ConfigDict(from_attributes=True)
 
 class ServiceUpdate(BaseModel):
     """

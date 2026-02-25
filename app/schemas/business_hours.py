@@ -80,3 +80,10 @@ class TimeSlotUpdate(BaseModel):
     @field_serializer('start_time', 'end_time')
     def serialize_time(self, t: time, _info):
         return t.strftime("%H:%M") if t else None
+
+# NUEVO: Esquema para el guardado masivo de la semana completa
+class BulkBusinessHoursUpdate(BaseModel):
+    collaborator_id: int = Field(..., description="ID del colaborador a actualizar")
+    schedules: List[BusinessHoursCreate] = Field(..., description="Lista de configuraciones por día")
+
+    model_config = ConfigDict(from_attributes=True)

@@ -8,11 +8,27 @@ from app.core.settings import settings
 from app.models.base import Base
 
 # 1. Creamos el engine
-# El parámetro pool_pre_ping=True ya ayuda, pero no evita el error al arrancar
+# --- CONFIGURACIÓN DEL ENGINE PARA NEON (AHORRO DE CU) ---
 engine = create_engine(
     settings.DATABASE_URL,
-    echo=False, #settings.debug,
-    pool_pre_ping=True,
+    # 1. Verifica si la conexión sigue viva antes de usarla
+    pool_pre_ping=True, 
+    
+    # 2. Reinicia las conexiones cada 5 min (300s)
+    # Evita que conexiones viejas mantengan a Neon despierto
+    pool_recycle=300, 
+    
+    # 3. Mantiene máximo 5 conexiones abiertas. Ideal para SaaS pequeño.
+    pool_size=5, 
+    
+    # 4. No permite crear conexiones extra fuera de las 5 del pool.
+    # Así controlas exactamente cuánta carga le das a Neon.
+    max_overflow=5,
+    
+    # 5. Tiempo máximo de espera para obtener una conexión del pool
+    pool_timeout=30,
+
+    echo=False
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

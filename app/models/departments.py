@@ -17,6 +17,11 @@ class Department(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False, unique=True)
     description = Column(String(255), nullable=True)
+    
+    # 🎨 CAMBIO: Atributo para personalización visual
+    # Usamos String(7) para guardar formatos '#RRGGBB'
+    color = Column(String(7), nullable=False, server_default="#3B82F6") 
+    
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -29,4 +34,4 @@ class Department(Base):
     )
 
     def __repr__(self):
-        return f"<Department(id={self.id}, name='{self.name}')>"
+        return f"<Department(id={self.id}, name='{self.name}', color='{self.color}')>"

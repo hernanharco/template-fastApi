@@ -48,9 +48,18 @@ class Appointment(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
+    # --- RELACIONES EXISTENTES ---    
     client = relationship("Client", back_populates="appointments")
     service = relationship("Service", back_populates="appointments") # esta forma podemos traer la info
     collaborator = relationship("Collaborator", back_populates="appointments")
+
+    # --- 🚀 NUEVA LÍNEA PARA RECORDATORIOS ---
+    # Esto permite que si borras la cita, SQLAlchemy limpie los recordatorios hijos.
+    reminders = relationship(
+        "ScheduledReminder", 
+        back_populates="appointment", 
+        cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<Appointment(id={self.id}, source='{self.source}', status={self.status})>"
@@ -59,9 +68,12 @@ class Appointment(Base):
         return {
             "id": self.id,
             "client_id": self.client_id,
-            "source": self.source, # Al ser string, ya no necesitas .value
-            "service_id": self.service_id,
             "client_name": self.client_name,
+            "service_id": self.service_id,
+            "service_name": self.service.name if self.service else None, # 👈 Aprovecha la relación
+            "collaborator_name": self.collaborator.name if self.collaborator else None, # 👈 Muy útil para el frontend
+            "source": self.source,
             "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
             "status": self.status.value if self.status else None
         }

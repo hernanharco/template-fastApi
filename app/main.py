@@ -1,12 +1,34 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager # Requerido para el nuevo Lifespan
 import uvicorn
+import time
 
 from app.core.settings import settings
 from app.db.session import get_db, create_tables
 from app.api.v1.api_route import api_router
+from app.models.metrics import ApiRouteMetric
+from app.db.session import SessionLocal
+
+from fastapi import BackgroundTasks
+
+# 2. Crea una función de ayuda fuera del middleware
+def save_metric_task(path: str, method: str, status_code: int, process_time: float):
+    db = SessionLocal()
+    try:
+        new_metric = ApiRouteMetric(
+            path=path,
+            method=method,
+            status_code=status_code,
+            process_time=process_time
+        )
+        db.add(new_metric)
+        db.commit()
+    except Exception as e:
+        print(f"⚠️ Error guardando métricas en background: {e}")
+    finally:
+        db.close()
 
 # 1. Definimos el ciclo de vida (Lifespan)
 # Este reemplaza a @app.on_event("startup")
@@ -60,6 +82,28 @@ app = FastAPI(
     debug=settings.DEBUG,
     lifespan=lifespan
 )
+
+# Revisa cual api esta consumiendo mas la base de datos
+# 3. Modifica el Middleware
+@app.middleware("http")
+async def log_route_metrics(request: Request, call_next):
+    start_time = time.perf_counter()
+    response = await call_next(request)
+    process_time = time.perf_counter() - start_time
+    
+    # 🚀 MAGIA: Usamos BackgroundTasks para no bloquear el flujo principal
+    # Extraemos los datos necesarios antes para evitar problemas con el objeto request
+    background_tasks = BackgroundTasks()
+    background_tasks.add_task(
+        save_metric_task, 
+        request.url.path, 
+        request.method, 
+        response.status_code, 
+        process_time
+    )
+    response.background = background_tasks
+    
+    return response
 
 # 3. CORS Middleware dinámico
 # Ahora toma la lista procesada desde tu Settings

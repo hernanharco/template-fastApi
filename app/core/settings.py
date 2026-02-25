@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     WHATSAPP_TOKEN: str = ""
     PHONE_NUMBER_ID: str = ""
 
+    # --- Telegram ---
+    TELEGRAM_BOT_NAME: str = ""
+    TELEGRAM_TOKEN: str = ""
+
     # Zona Horaria
     APP_TIMEZONE: str = "UTC"
     
