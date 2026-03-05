@@ -26,7 +26,7 @@ class ScheduledReminder(Base):
     
     # 🚀 CONTROL DE CANAL
     # Aquí guardamos si el dueño/cliente eligió 'whatsapp' o 'telegram'
-    prefer_channel = Column(String, default="whatsapp") 
+    prefer_channel = Column(String, default="pendiente") 
 
     # Relación opcional para acceder a los datos de la cita desde el recordatorio
     appointment = relationship("Appointment", back_populates="reminders")

@@ -1,161 +1,129 @@
-from typing import Annotated, Literal
-import re
-from langgraph.graph import StateGraph, START, END
-from langchain_core.messages import AIMessage, HumanMessage
-from sqlalchemy.orm import Session
-from rich import print as rprint
+import traceback
+import logging
+from typing import Dict, Any
+import uuid
+from rich.console import Console
+from rich.panel import Panel
+from langgraph_sdk import get_client
 
-from app.agents.identity.identitynode import identity_node, AgentState
-from app.agents.service.servicenode import service_expert_node
-from app.agents.booking.booking_node import booking_expert_node
-from app.agents.appointments.appointments_node import appointment_confirmation_node
-from app.models.clients import Client
-from app.agents.core.extractor_master import extract_intent
+console = Console()
+logger = logging.getLogger(__name__)
 
-# ==========================================
-# PARTE 1: NODOS Y ROUTER
-# ==========================================
-
-def farewell_node(state: AgentState) -> dict:
-    return {
-        "messages": [AIMessage(content="¡De nada! Aquí estaré si necesitas algo más. ¡Que tengas un gran día! ✨")],
-        "current_node": "farewell",
-        "service_id": None
-    }
-
-def main_assistant_node(state: AgentState) -> dict:
-    return {
-        "messages": [AIMessage(content="Estoy lista para ayudarte con tu cita 💇‍♀️")],
-        "current_node": "main_assistant",
-    }
-
-def should_go_to_main(state: AgentState) -> Literal["service_expert", "booking_expert", "appointment_confirmation", "farewell", "identity", END]:
-    nombre = state.get("client_name")
-    messages = state.get("messages", [])
-    
-    if not messages or isinstance(messages[-1], AIMessage): return END
-
-    last_user_msg = messages[-1].content.lower().strip()
-    if not nombre or nombre == "Nuevo Cliente": return "identity"
-    
-    history = messages[:-1][-5:] if len(messages) > 1 else []
-    intent = extract_intent(last_user_msg, history)
-    rprint(f"[bold magenta]🔮 IA ROUTER INTENT:[/bold magenta] {intent}")
-
-    # REGLA DE ORO: Manejo del "si" tras un rechazo
-    last_ai_msg = ""
-    for m in reversed(messages[:-1]):
-        if isinstance(m, AIMessage):
-            last_ai_msg = m.content.lower()
-            break
-
-    if ("lo siento" in last_ai_msg or "no me quedan" in last_ai_msg) and intent == "confirmation":
-        rprint("[bold yellow]🔄 ROUTER: El usuario aceptó buscar otro día. Volvemos a Booking.[/bold yellow]")
-        return "booking_expert"
-
-    if intent == "confirmation": return "appointment_confirmation"
-    if intent == "booking": return "booking_expert"
-    if intent in ["greeting", "info"]: return "service_expert"
-    if intent == "farewell": return "farewell"
-
-    return "service_expert"
-
-# ==========================================
-# PARTE 2: CONSTRUCCIÓN DEL GRAFO (DEFINICIÓN Y ASIGNACIÓN)
-# ==========================================
-
-def build_maria_master_graph():
-    workflow = StateGraph(AgentState)
-    
-    workflow.add_node("identity", identity_node)
-    workflow.add_node("service_expert", service_expert_node)
-    workflow.add_node("booking_expert", booking_expert_node)
-    workflow.add_node("appointment_confirmation", appointment_confirmation_node)
-    workflow.add_node("main_assistant", main_assistant_node)
-    workflow.add_node("farewell", farewell_node)
-
-    workflow.add_edge(START, "identity")
-    
-    workflow.add_conditional_edges(
-        "identity",
-        should_go_to_main,
-        {
-            "service_expert": "service_expert",
-            "booking_expert": "booking_expert",
-            "appointment_confirmation": "appointment_confirmation",
-            "farewell": "farewell",
-            "identity": "identity",
-            "main_assistant": "main_assistant",
-            END: END,
-        }
-    )
-    
-    for node in ["service_expert", "booking_expert", "appointment_confirmation", "main_assistant", "farewell"]:
-        workflow.add_edge(node, END)
-
-    return workflow.compile()
-
-# IMPORTANTE: Creamos la instancia del grafo ANTES de la clase que lo usa
-graph_maria = build_maria_master_graph()
-
-# ==========================================
-# PARTE 3: EL ORQUESTADOR
-# ==========================================
 
 class MariaMaster:
-    def process(self, db: Session, phone: str, user_input: str) -> dict:
-        rprint(f"\n[bold blue]─── 🧠 PROCESANDO: {phone} ───[/bold blue]")
-        
-        # 1. Obtener cliente
-        client = db.query(Client).filter(Client.phone == phone).first()
-        if not client:
-            client = Client(phone=phone, full_name="Nuevo Cliente", business_id=1, metadata_json={"messages": [], "service_id": None})
-            db.add(client); db.commit(); db.refresh(client)
+    """
+    🎯 Orquestador Master de María:
+    Conecta el Webhook de FastAPI con el servidor de LangGraph (Desarrollo Local).
+    Usa el thread_id para mantener la persistencia de IDs de servicios y horarios.
+    """
 
-        # 2. Reconstruir historial de objetos de LangChain
-        history = []
-        history_raw = client.metadata_json.get("messages", [])
-        for m in history_raw:
-            role_class = HumanMessage if m["role"] == "user" else AIMessage
-            history.append(role_class(content=m["content"]))
+    def __init__(self, url: str = "http://localhost:2024"):
+        # La URL debe coincidir con el puerto donde corre 'langgraph dev'
+        self.url = url
+        # El assistant_id debe ser el nombre definido en tu archivo langgraph.json
+        self.assistant_id = "mariamaster"
 
-        # ✨ EL PARCHE DE CONTEXTO:
-        # Creamos un string simple con los últimos 3-4 mensajes para que la IA del extractor tenga "memoria".
-        # Esto es lo que usará extract_booking_intent(user_msg, history_text)
-        context_string = "\n".join([f"{m['role']}: {m['content']}" for m in history_raw[-4:]])
+    async def process_message(self, phone: str, user_input: str) -> Dict[str, Any]:
+        """
+        Procesa el mensaje del usuario manteniendo la persistencia por hilo (Thread).
+        """
+        # Generamos un ID de hilo único por teléfono para mantener la memoria
+        thread_uuid = uuid.uuid5(uuid.NAMESPACE_URL, f"whatsapp_{phone}")
+        thread_id = str(thread_uuid)
 
-        # 3. Preparar entrada para el grafo
-        inputs = {
-            "messages": history + [HumanMessage(content=user_input)],
-            "client_phone": phone,
-            "client_name": client.full_name if client.full_name != "Nuevo Cliente" else None,
-            "business_slug": "la-mega-tienda",
-            "service_id": client.metadata_json.get("service_id"),
-            "history_text": context_string # 👈 Pasamos el contexto aquí
-        }
+        console.print(
+            f"\n[bold cyan]🤖 María Master:[/bold cyan] Enviando a servidor LangGraph (Thread: [yellow]{thread_id}[/yellow])"
+        )
 
         try:
-            # 4. Ejecutar el Grafo
-            final_state = graph_maria.invoke(inputs, config={"configurable": {"thread_id": phone}})
-            
-            # 5. Persistencia de nombre
-            if final_state.get("client_name") and final_state["client_name"] != "Nuevo Cliente":
-                client.full_name = final_state["client_name"]
+            client = get_client(url=self.url)
 
-            # 6. Guardar mensajes y service_id (Persistencia en Neon)
-            updated_msgs = [{"role": "user" if isinstance(m, HumanMessage) else "assistant", "content": m.content} for m in final_state["messages"]]
-            client.metadata_json = {
-                "messages": updated_msgs, 
-                "service_id": final_state.get("service_id")
-            }
-            db.commit()
+            # --- 🛡️ ASEGURAR QUE EL HILO EXISTA ---
+            try:
+                await client.threads.get(thread_id)
+            except Exception:
+                # Si no existe (404), lo creamos primero
+                await client.threads.create(thread_id=thread_id)
+                console.print(f"[yellow]🧵 Hilo nuevo creado en servidor:[/yellow] {thread_id}")
 
-            return {
-                "text": final_state["messages"][-1].content,
-                "has_changes": (final_state.get("current_node") == "appointment_confirmation")
-            }
+            # 2. Ejecución
+            await client.runs.wait(
+                thread_id=thread_id,
+                assistant_id=self.assistant_id,
+                input={
+                    "messages": [{"role": "user", "content": user_input}],
+                    "client_phone": phone,
+                },
+            )
+
+            # 3. Recuperamos el estado final del hilo para obtener la respuesta de la IA
+            state = await client.threads.get_state(thread_id)
+
+            # 4. Extracción segura del último mensaje generado por la IA
+            values = state.get("values", {})
+            messages = values.get("messages", [])
+
+            ai_response = "Lo siento, tuve un problema al procesar tu mensaje."
+
+            if messages:
+                # El servidor devuelve diccionarios, buscamos el último con rol 'assistant' o 'ai'
+                for msg in reversed(messages):
+                    # Manejo flexible si el mensaje es un dict o un objeto
+                    content = (
+                        msg.get("content")
+                        if isinstance(msg, dict)
+                        else getattr(msg, "content", None)
+                    )
+                    role = (
+                        msg.get("role")
+                        if isinstance(msg, dict)
+                        else getattr(msg, "role", None)
+                    )
+                    msg_type = (
+                        msg.get("type")
+                        if isinstance(msg, dict)
+                        else getattr(msg, "type", None)
+                    )
+
+                    if (role in ["assistant", "ai"] or msg_type == "ai") and content:
+                        ai_response = content
+                        break
+
+            # 5. Telemetría de Rich para depuración visual
+            self._print_debug_panel(state)
+
+            return {"text": ai_response, "has_changes": False}
+
         except Exception as e:
-            rprint(f"[bold red]❌ ERROR EN EL GRAFO:[/bold red] {e}")
-            return {"text": "Lo siento, tuve un pequeño problema técnico. ¿Podemos intentarlo de nuevo?", "has_changes": False}
+            console.print(
+                f"[bold red]❌ Error en comunicación con LangGraph:[/bold red] {str(e)}"
+            )
+            # Imprimimos el error completo en consola para diagnóstico
+            traceback.print_exc()
+            return {
+                "text": "Ups, mi conexión se interrumpió un momento. ¿Podrías decirme eso de nuevo?",
+                "has_changes": False,
+            }
 
-maria = MariaMaster()
+    def _print_debug_panel(self, state: dict):
+        """
+        Muestra en la terminal los datos que el servidor está recordando.
+        """
+        values = state.get("values", {})
+        ids = values.get("shown_service_ids", [])
+        slots = values.get("active_slots", [])
+        name = values.get("client_name", "Desconocido")
+
+        console.print(
+            Panel(
+                f"👤 [bold white]Cliente:[/bold white] {name}\n"
+                f"📦 [bold green]IDs en Memoria:[/bold green] {ids}\n"
+                f"🕒 [bold blue]Horarios en Memoria:[/bold blue] {len(slots)} slots",
+                title="[bold magenta]DEBUG: Estado del Hilo[/bold magenta]",
+                expand=False,
+            )
+        )
+
+
+# Instancia lista para usar en tus endpoints
+maria_master = MariaMaster()

@@ -1,6 +1,6 @@
 # app/services/telegram.py
 import httpx
-from app.core.settings import settings
+from app.core.config import settings
 from rich import print as rprint
 
 def get_telegram_link(appointment_id: int) -> str:

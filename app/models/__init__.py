@@ -4,5 +4,14 @@ from .services import Service
 from .business_hours import BusinessHours, TimeSlot
 from .collaborators import Collaborator
 from .appointments import Appointment
+from .reminder import ScheduledReminder
 
-__all__ = ["Base", "Service", "BusinessHours", "TimeSlot", "Collaborator", "Appointment"]
+__all__ = [
+    "Base",
+    "Service",
+    "BusinessHours",
+    "TimeSlot",
+    "Collaborator",
+    "Appointment",
+    "ScheduledReminder",
+]

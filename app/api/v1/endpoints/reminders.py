@@ -8,7 +8,7 @@ from rich.panel import Panel
 
 from app.db.session import get_db 
 from app.models.reminder import ScheduledReminder
-from app.core.settings import settings
+from app.core.config import settings
 # 🚀 Servicio de Telegram actualizado que ya acepta reply_markup
 from app.services.telegram import send_telegram_message 
 

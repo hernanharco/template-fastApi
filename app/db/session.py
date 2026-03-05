@@ -1,62 +1,78 @@
+# app/db/session.py
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import OperationalError  # Importante para capturar fallos de red/auth
+from sqlalchemy.exc import OperationalError
+# 🟢 Importaciones necesarias para asíncrono
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
-from app.core.settings import settings
-
-# Importamos declarative_base desde el modelo base
+from app.core.config import settings
 from app.models.base import Base
 
-# 1. Creamos el engine
-# --- CONFIGURACIÓN DEL ENGINE PARA NEON (AHORRO DE CU) ---
+# ==============================================================================
+# --- CONFIGURACIÓN SÍNCRONA (Para FastAPI tradicional) ---
+# ==============================================================================
+# 'create_engine' funciona bien con la URL tal cual viene del .env
 engine = create_engine(
     settings.DATABASE_URL,
-    # 1. Verifica si la conexión sigue viva antes de usarla
     pool_pre_ping=True, 
-    
-    # 2. Reinicia las conexiones cada 5 min (300s)
-    # Evita que conexiones viejas mantengan a Neon despierto
     pool_recycle=300, 
-    
-    # 3. Mantiene máximo 5 conexiones abiertas. Ideal para SaaS pequeño.
     pool_size=5, 
-    
-    # 4. No permite crear conexiones extra fuera de las 5 del pool.
-    # Así controlas exactamente cuánta carga le das a Neon.
     max_overflow=5,
-    
-    # 5. Tiempo máximo de espera para obtener una conexión del pool
     pool_timeout=30,
-
     echo=False
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def get_db():
+    """Generador síncrono para dependencias de FastAPI (@app.get)"""
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
+# ==============================================================================
+# --- 🟢 CONFIGURACIÓN ASÍNCRONA (Para Agentes LangGraph) ---
+# ==============================================================================
+
+# 1. Aseguramos que la URL comience con postgresql+asyncpg y limpiamos parámetros
+# para pasarlos explícitamente en 'connect_args'.
+base_url = settings.DATABASE_URL.split("?")[0]
+async_url = base_url.replace("postgresql://", "postgresql+asyncpg://")
+
+# 2. Creamos el engine forzando el driver asyncpg y configurando SSL
+async_engine = create_async_engine(
+    async_url,
+    # 🟢 Pasamos SSL y Channel Binding aquí para asyncpg
+    connect_args={
+        "ssl": "require",
+        "server_settings": {"channel_binding": "require"}
+    },
+    echo=False
+)
+
+# 🟢 AsyncSessionLocal es la que debes usar en tools.py con 'async with'
+AsyncSessionLocal = async_sessionmaker(
+    bind=async_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+# ==============================================================================
+# --- UTILIDADES ---
+# ==============================================================================
 def create_tables():
-    """
-    Intenta crear las tablas, pero si la URL es incorrecta o no hay conexión,
-    muestra un mensaje en lugar de detener el servidor.
-    """
+    """Verifica conexión y crea tablas síncronamente al iniciar"""
     print(f"--- Verificando conexión a NEON ({settings.ENVIRONMENT}) ---")
     try:
-        # Intentamos una operación mínima: pedir la versión o un SELECT 1
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         
-        # Si llega aquí, la conexión es real. Creamos las tablas.
         Base.metadata.create_all(bind=engine)
         print("✅ Conexión exitosa: Tablas verificadas/creadas en NEON.")
         
     except OperationalError as e:
-        # Aquí capturamos el error de "password authentication failed" o "host not found"
         print("\n" + "!"*60)
         print("⚠️  AVISO DE CONFIGURACIÓN DE BASE DE DATOS")
         print(f"No se pudo conectar a la base de datos en: {settings.ENVIRONMENT}")
@@ -68,7 +84,7 @@ def create_tables():
         print(f"❌ Ocurrió un error inesperado al inicializar la DB: {e}")
 
 def drop_tables():
-    """Solo se ejecuta si realmente hay conexión"""
+    """Borra tablas síncronamente"""
     try:
         Base.metadata.drop_all(bind=engine)
     except Exception as e:

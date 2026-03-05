@@ -1,9 +1,17 @@
 import re
 from typing import Optional, List
 from datetime import datetime, date
-from pydantic import BaseModel, Field, field_validator, ValidationInfo, ConfigDict, computed_field
+from pydantic import (
+    BaseModel,
+    Field,
+    field_validator,
+    ValidationInfo,
+    ConfigDict,
+    computed_field,
+)
 from app.models.appointments import AppointmentStatus
 from app.schemas.department import Department as DepartmentSchema
+
 
 # Esta clase trae los campos de la relacion que este caso seria la service
 class ServiceReadSimple(BaseModel):
@@ -15,6 +23,7 @@ class ServiceReadSimple(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
 # Esta clase es la base para crear y actualizar citas
 class AppointmentBase(BaseModel):
     service_id: int = Field(..., gt=0)
@@ -25,20 +34,25 @@ class AppointmentBase(BaseModel):
     client_notes: Optional[str] = Field(None, max_length=1000)
     start_time: datetime
     end_time: datetime
-    
-    @field_validator('start_time', 'end_time', mode='before')
+    source: Optional[str] = Field(
+        "manual", max_length=50
+    )  # Por defecto "manual", pero se puede sobreescribir
+
+    @field_validator("start_time", "end_time", mode="before")
     @classmethod
     def clean_tz_info(cls, v):
         if isinstance(v, str):
             # Si viene como string, lo convertimos a datetime primero
-            v = datetime.fromisoformat(v.replace('Z', '+00:00'))
+            v = datetime.fromisoformat(v.replace("Z", "+00:00"))
         if isinstance(v, datetime):
             return v.replace(tzinfo=None)
         return v
 
+
 # Esta clase es la que se usa para crear una cita
 class AppointmentCreate(AppointmentBase):
-    pass # No necesita validaciones adicionales
+    pass  # No necesita validaciones adicionales
+
 
 class DepartmentReadSimple(BaseModel):
     id: int
@@ -46,6 +60,7 @@ class DepartmentReadSimple(BaseModel):
     color: Optional[str] = "#6366f1"  # Color por defecto si es nulo
 
     model_config = ConfigDict(from_attributes=True)
+
 
 # Esta clase es la que se devuelve cuando se lee una cita ejemplo cuando leemos la api se devuelven estos campos
 class AppointmentRead(BaseModel):
@@ -58,7 +73,7 @@ class AppointmentRead(BaseModel):
     # 🎯 CAMBIO CLAVE: Agregamos el objeto service completo
     # Esto buscará la relación 'service' que definiste en tu modelo de SQLAlchemy
     service: Optional[ServiceReadSimple] = None
-    
+
     client_name: str
     client_phone: Optional[str] = None
     client_email: Optional[str] = None
@@ -70,7 +85,7 @@ class AppointmentRead(BaseModel):
     updated_at: datetime
     duration_minutes: Optional[int] = None
     source: str
-    
+
     # --- PROPIEDAD CALCULADA ---
     # Usamos computed_field para que Pydantic lea la @property del modelo
     @computed_field
@@ -81,6 +96,7 @@ class AppointmentRead(BaseModel):
 
     # Configuración para Pydantic v2
     model_config = ConfigDict(from_attributes=True)
+
 
 # Esta clase es la que se usa para actualizar una cita
 class AppointmentUpdate(BaseModel):
@@ -94,11 +110,13 @@ class AppointmentUpdate(BaseModel):
     end_time: Optional[datetime] = None
     status: Optional[AppointmentStatus] = None
 
-    @field_validator('start_time', 'end_time')
+    @field_validator("start_time", "end_time")
     @classmethod
     def clean_update_times(cls, v: Optional[datetime]):
-        if v is None: return v
+        if v is None:
+            return v
         return v.replace(tzinfo=None) if v.tzinfo else v
+
 
 # --- Otros esquemas ---
 class TimeSlot(BaseModel):
@@ -108,6 +126,7 @@ class TimeSlot(BaseModel):
     collaborator_name: str
     available_minutes: int
 
+
 # Esta clase es la que se devuelve cuando se consulta los slots disponibles
 class AvailableSlotsResponse(BaseModel):
     date: str
@@ -116,12 +135,14 @@ class AvailableSlotsResponse(BaseModel):
     available_slots: List[TimeSlot]
     total_slots: int
 
+
 class DayCountResponse(BaseModel):
     """
     🎯 Soluciona el error de validación.
     Define claramente que 'date' es un objeto de fecha (que Pydantic convertirá a string ISO)
     y 'count' es un entero.
     """
+
     date: date
     count: int
 

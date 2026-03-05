@@ -4,8 +4,9 @@ from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager # Requerido para el nuevo Lifespan
 import uvicorn
 import time
+import os
 
-from app.core.settings import settings
+from app.core.config import settings
 from app.db.session import get_db, create_tables
 from app.api.v1.api_route import api_router
 from app.models.metrics import ApiRouteMetric
@@ -36,6 +37,18 @@ def save_metric_task(path: str, method: str, status_code: int, process_time: flo
 async def lifespan(app: FastAPI):
     print(f"🚀 Starting FastAPI app in {settings.ENVIRONMENT} mode")
 
+    # --- CONFIGURACIÓN DE LANGSMITH (TRACING) ---
+    if settings.LANGSMITH_TRACING:
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        os.environ["LANGCHAIN_API_KEY"] = settings.LANGSMITH_API_KEY
+        os.environ["LANGCHAIN_PROJECT"] = settings.LANGSMITH_PROJECT
+        os.environ["LANGCHAIN_ENDPOINT"] = settings.LANGSMITH_ENDPOINT or "https://api.smith.langchain.com"
+        print("📊 LangSmith Tracing: ENABLED")
+    else:
+        os.environ["LANGCHAIN_TRACING_V2"] = "false"
+        print("📊 LangSmith Tracing: DISABLED")
+    # --------------------------------------------
+
     # --- VERIFICACIÓN DE ZONA HORARIA ---
     import pytz
     from datetime import datetime
@@ -55,14 +68,14 @@ async def lifespan(app: FastAPI):
         print("🔗 Database URL: No encontrada o incorrecta")
     # Aquí podrías conectar a Redis o cargar un modelo de IA pesado
     create_tables()
-    
+
     yield  # <--- Aquí la app está encendida y recibiendo clientes
     
     # --- CIERRE (SHUTDOWN) ---
     print("👋 Iniciando proceso de apagado...")
     
     # Ejemplo 1: Cerrar todas las conexiones a la DB para no saturar a Neon
-    from .db.session import engine
+    from app.db.session import engine
     engine.dispose() 
     print("🔌 Conexiones a la base de datos cerradas.")
     

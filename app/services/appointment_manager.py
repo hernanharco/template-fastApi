@@ -4,7 +4,11 @@ from app.models.appointments import Appointment, AppointmentStatus
 from app.models.services import Service
 from app.models.clients import Client
 from app.schemas.appointments import AppointmentCreate
-from app.services.availability import is_valid_appointment_time, find_available_collaborator
+from app.services.availability import (
+    is_valid_appointment_time,
+    find_available_collaborator,
+)
+
 
 class AppointmentManager:
     """
@@ -12,9 +16,15 @@ class AppointmentManager:
     Aplica el principio de Responsabilidad Única (SRP) sacando la lógica pesada del router.
     """
 
-    async def create_full_appointment(self, db: Session, data: AppointmentCreate) -> Appointment:
+    async def create_full_appointment(
+        self, db: Session, data: AppointmentCreate
+    ) -> Appointment:
         # 1. Validar que el servicio exista y esté activo
-        service = db.query(Service).filter(Service.id == data.service_id, Service.is_active == True).first()
+        service = (
+            db.query(Service)
+            .filter(Service.id == data.service_id, Service.is_active == True)
+            .first()
+        )
         if not service:
             raise ValueError("El servicio solicitado no existe o está inactivo.")
 
@@ -26,7 +36,9 @@ class AppointmentManager:
                 db, data.start_time, data.end_time, data.service_id
             )
             if not final_colab_id:
-                raise ValueError("No hay profesionales disponibles para este horario y servicio.")
+                raise ValueError(
+                    "No hay profesionales disponibles para este horario y servicio."
+                )
 
         # 3. Validar conflictos de horario (Regla de Oro: A < D y B > C)
         is_valid, error_msg = is_valid_appointment_time(
@@ -40,12 +52,12 @@ class AppointmentManager:
 
         # 5. Crear la instancia de la Cita
         # Excluimos collaborator_id del dict porque usamos el final_colab_id calculado
-        appointment_dict = data.dict(exclude={'collaborator_id'})
+        appointment_dict = data.dict(exclude={"collaborator_id"})
         new_appointment = Appointment(
             **appointment_dict,
             collaborator_id=final_colab_id,
             client_id=client.id,
-            status=AppointmentStatus.SCHEDULED
+            status=AppointmentStatus.SCHEDULED,
         )
 
         try:
@@ -68,17 +80,41 @@ class AppointmentManager:
             client = Client(
                 full_name=data.client_name,
                 phone=data.client_phone,
-                email=data.client_email
+                email=data.client_email,
             )
             db.add(client)
-            db.flush() # flush para obtener el ID sin cerrar la transacción
+            db.flush()  # flush para obtener el ID sin cerrar la transacción
+
+            # 🚀 ASIGNAR AUTOMÁTICAMENTE TODOS LOS COLABORADORES SI ES CREADO POR IA
+            if data.source == "ia":
+                from app.models.collaborators import Collaborator
+
+                collaborators = (
+                    db.query(Collaborator).filter(Collaborator.is_active == True).all()
+                )
+
+                for collaborator in collaborators:
+                    from app.models.clients import ClientCollaborator
+
+                    client_collab = ClientCollaborator(
+                        client_id=client.id,
+                        collaborator_id=collaborator.id,
+                        is_favorite=False,  # Por defecto no es favorito, el cliente puede marcar después
+                    )
+                    db.add(client_collab)
+
+                db.flush()
+                print(
+                    f"✅ Cliente {client.full_name} asignado a {len(collaborators)} colaboradores automáticamente"
+                )
         else:
             # Si ya existe, actualizamos su nombre y correo por si han cambiado
             client.full_name = data.client_name
             if data.client_email:
                 client.email = data.client_email
-        
+
         return client
+
 
 # Instancia única para ser usada en el router (Singleton pattern)
 appointment_manager = AppointmentManager()

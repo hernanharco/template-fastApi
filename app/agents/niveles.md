@@ -44,3 +44,36 @@ Diferencia con el Master: El Master es el "Dueño del Negocio" (manda a todo el 
 Su función: Definir el orden.
 
 Responsabilidad: Dice: "Primero ejecuta el Extractor, LUEGO pasa al Orquestador de Booking". Si usas LangGraph, aquí es donde dibujas las flechas.
+_________
+
+"Menos infraestructura, más valor".
+
+1. El Secreto de la "Salida Forzada" (Guardrails)
+El mayor miedo de un negocio local es que la IA diga una locura o se quede en un bucle.
+
+El secreto: No confíes ciegamente en el LLM para responder. Usa validadores. Si el LLM extrae una fecha que ya pasó (ayer), el nodo no debe procesarla. Debe haber una lógica en Python (no en IA) que diga: "Oye, esa fecha no es válida".
+
+Implementación: En tus aristas condicionales, siempre ten un camino de "Error" o "Aclaración".
+
+2. El Secreto del "Contexto Mínimo Viable"
+A medida que la conversación crece, el historial de mensajes se vuelve gigante. Esto hace que el bot sea lento y caro (gasta muchos tokens).
+
+El secreto: No le pases TODO el historial al LLM en cada nodo.
+
+Técnica: Usa un Summarizer (Resumidor). Cuando la charla pase de 10 mensajes, crea un nodo que resuma lo anterior ("El cliente se llama Hernán, quiere cejas para el miércoles") y borra los mensajes viejos del state. Así el bot siempre está "fresco".
+
+3. El Secreto de la "Observabilidad" (LangSmith)
+Como ya estás usando LangGraph, este es tu superpoder secreto.
+
+El secreto: No adivines por qué el bot se equivocó. Usa LangSmith para ver exactamente qué entró y qué salió de cada nodo.
+
+Por qué importa: Cuando un cliente te diga "el bot me dio una cita un domingo y cerramos los domingos", vas a LangSmith, miras el rastro (trace) y verás si el error fue del Extractor (entendió mal el día) o del BookingNode (no filtró bien la base de datos).
+
+4. El Secreto del "Human-in-the-Loop" (Intervención Humana)
+Un SaaS para negocios locales necesita que el dueño pueda intervenir si algo sale mal.
+
+El secreto: Crea un "Interruptor". Si el bot detecta frustración (el usuario escribe en mayúsculas o usa insultos), el Grafo debe cambiar el status a human_required y detenerse.
+
+Acción: Envía una notificación al dueño del negocio por WhatsApp: "Oye, Hernán necesita ayuda humana con su cita". El bot se calla y deja que el humano hable.
+
+![alt text](image-1.png)
