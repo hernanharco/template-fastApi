@@ -1,41 +1,51 @@
+import json
+from rich import print as rprint
+from rich.panel import Panel
 from langchain_openai import ChatOpenAI
-from app.agents.routing.state import RoutingState
+
 from app.core.config import settings
+from app.agents.routing.state import RoutingState
+from app.agents.routing.tools import update_client_name
+# Importamos solo el evaluador principal
+from app.agents.routing.rules import evaluate_all_rules
 
 async def router_node(state: RoutingState):
-    llm = ChatOpenAI(
-        model="gpt-4o-mini", 
-        temperature=0,
-        api_key=settings.OPENAI_API_KEY
+    """🎯 SRP: Orquestador de tráfico. Decide el siguiente nodo."""
+    user_input = state["messages"][-1].content
+    current_name = state.get("client_name", "Nuevo Cliente")
+    shown_ids = state.get("shown_service_ids", [])
+    active_slots = state.get("active_slots", [])
+
+    rprint(Panel(f"[bold yellow]Router analizando:[/bold yellow] {user_input}"))
+
+    # 1. Ejecutar el motor de reglas (Cero IA, máxima velocidad)
+    next_action, selected_id = evaluate_all_rules(user_input, current_name, shown_ids, active_slots)
+    
+    if next_action:
+        return {"next_action": next_action, "selected_service_id": selected_id}
+
+    # 2. Red de Seguridad: IA de Rescate (Solo si las reglas fallan)
+    llm = ChatOpenAI(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY, temperature=0)
+    
+    patch_prompt = (
+        f"Analiza: '{user_input}'. IDs: {shown_ids}.\n"
+        "Clasifica la intención para una peluquería.\n"
+        'Responde SOLO JSON: {"intent": "BOOKING|CATALOG|GREETING|CONFIRMATION", "id": int|null}'
     )
     
-    # 1. Recuperamos el contexto del estado
-    user_input = state["messages"][-1].content
-    has_services_shown = len(state.get("shown_service_ids", [])) > 0
-    has_slots_shown = len(state.get("active_slots", [])) > 0
+    try:
+        res = await llm.ainvoke([("system", patch_prompt)])
+        data = json.loads(res.content.replace("```json", "").replace("```", "").strip())
+        
+        # Lógica especial para captura de nombre de nuevos clientes
+        if data["intent"] == "GREETING" and current_name == "Nuevo Cliente":
+            name_res = await llm.ainvoke(f"Extrae solo el nombre propio de: '{user_input}'. Si no hay, responde INVALID_NAME")
+            nombre = name_res.content.strip()
+            if "INVALID_NAME" not in nombre:
+                update_client_name(state["client_phone"], nombre)
+                return {"next_action": "GREETING", "client_name": nombre, "is_new_user": False}
 
-    # 2. Mejoramos el Prompt para que la IA sepa en qué punto estamos
-    prompt = f"""Eres el clasificador de una peluquería. 
-    Tu tarea es decidir el siguiente paso basado en el mensaje y el CONTEXTO actual.
-
-    CONTEXTO ACTUAL:
-    - ¿Se mostraron servicios recientemente?: {has_services_shown}
-    - ¿Se mostraron horarios recientemente?: {has_slots_shown}
-
-    REGLAS DE CLASIFICACIÓN:
-    - GREETING: El usuario saluda, se presenta (ej: "Soy Hernán"), da las gracias o se despide.
-    - BOOKING: El usuario quiere ver servicios, precios, O está respondiendo con un número para elegir un servicio (ej: "7").
-    - CONFIRMATION: El usuario está respondiendo con un número para elegir una HORA de cita (ej: "1" o "2").
-    - CATALOG: El usuario pide explícitamente ver el catálogo o lista de precios.
-
-    Mensaje del usuario: "{user_input}"
-    
-    Responde ÚNICAMENTE con la etiqueta:"""
-    
-    response = await llm.ainvoke(prompt)
-    decision = response.content.strip().upper()
-
-    # Mapeamos APPOINTMENT a BOOKING si usas ese nombre en el grafo
-    if decision == "APPOINTMENT": decision = "BOOKING"
-
-    return {"next_action": decision}
+        return {"next_action": data["intent"], "selected_service_id": data.get("id")}
+    except Exception as e:
+        rprint(f"[red]Error en IA de rescate: {e}[/red]")
+        return {"next_action": "CATALOG"}

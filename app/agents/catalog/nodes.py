@@ -1,83 +1,58 @@
-import json
 import logging
-from langchain_openai import ChatOpenAI
+import random
 from langchain_core.messages import AIMessage
 from app.core.config import settings
 from app.agents.routing.state import RoutingState
 from app.agents.catalog.tools import get_services_catalog
+from rich import print as rprint
 
 logger = logging.getLogger(__name__)
 
 async def catalog_node(state: RoutingState):
     """
-    🎯 SRP: Única responsabilidad: Gestionar la selección o exhibición del catálogo.
-    Muestra una vista Premium minimalista sin precios ni tiempos.
+    🎯 SRP: Única responsabilidad: Presentar el catálogo de servicios disponible
+    y registrar qué IDs se le mostraron al usuario para el ruteo posterior.
     """
-    llm = ChatOpenAI(
-        model="gpt-4o-mini",
-        api_key=settings.OPENAI_API_KEY,
-        temperature=0,
-    )
-
-    user_input = state["messages"][-1].content
-    
-    # 1. Consulta de datos (Infraestructura mínima, valor máximo)
+    # 1. Obtener datos de la DB (vía tool)
     services_data = get_services_catalog()
+
     if not services_data:
+        rprint("[yellow]⚠️ No se encontraron servicios en la base de datos.[/yellow]")
         return {
-            "messages": [AIMessage(content="En este momento estamos preparando nuevas experiencias para ti. Vuelve pronto.")],
+            "messages": [AIMessage(content="✨ *Estamos preparando nuevas experiencias para ti. Vuelve pronto.*")],
             "next_action": "FINISH"
         }
 
-    # 2. Identificación de intención mediante LLM
-    system_prompt = (
-        f"Eres el concierge de {settings.BUSINESS_NAME}.\n"
-        "Tu misión es identificar si el cliente ha seleccionado un servicio específico.\n"
-        f"CATÁLOGO DISPONIBLE: {json.dumps(services_data)}\n"
-        "REGLA: Si el cliente menciona un servicio o su número, devuelve el ID. Si es un saludo o consulta general, null."
+    # 2. Configuración estética (Emojis cambiantes para no ser monótonos)
+    iconos = ["✂️", "✨", "💅", "💈", "🌟", "💆‍♀️", "🔥", "💎"]
+    
+    # 3. Construcción del mensaje con formato limpio (Negritas en lugar de cursivas)
+    header = f"✨ *Bienvenido a {settings.BUSINESS_NAME}* ✨\n\n"
+    body = "He diseñado una selección de experiencias exclusivas para ti:\n\n"
+    
+    for i, s in enumerate(services_data, 1):
+        # Seleccionamos un emoji aleatorio para cada item
+        emoji = random.choice(iconos)
+        # Usamos negritas para el nombre del servicio para mejor legibilidad
+        body += f"{i}. {emoji} *{s['name']}*\n"
+
+    footer = (
+        "\n━━━━━━━━━━━━━━\n"
+        "👉 *¿Cuál de ellas te gustaría disfrutar hoy?*\n"
+        "_(Escribe el nombre o el número de la opción)_"
     )
 
-    json_format = {
-        "identified_service_id": "int o null",
-        "reason": "str"
-    }
+    full_message = header + body + footer
 
-    try:
-        response = await llm.ainvoke([
-            ("system", f"{system_prompt}\nResponde en JSON: {json.dumps(json_format)}"),
-            ("user", user_input),
-        ])
-        
-        data = json.loads(response.content.replace("```json", "").replace("```", "").strip())
-    except Exception as e:
-        logger.error(f"Error en catalog_node: {e}")
-        return {"next_action": "FINISH"}
+    # 4. Registro de IDs mostrados
+    # Esto es VITAL para que el router sepa que si el usuario dice "1", 
+    # se refiere al primer ID de esta lista específica.
+    shown_ids = [s['id'] for s in services_data]
 
-    service_id = data.get("identified_service_id")
-
-    # CASO A: Selección detectada (Manda al flujo de reserva)
-    if service_id:
-        return {
-            "next_action": "BOOKING",
-            "selected_service_id": service_id,
-        }
-
-    # CASO B: Vista Premium (Limpia y sofisticada)
-    # Diseño: Usamos viñetas elegantes y eliminamos datos técnicos (precios/minutos)
-    texto_premium = (
-        f"✨ *Bienvenido a {settings.BUSINESS_NAME}* ✨\n\n"
-        "Es un placer asistirte. Hemos diseñado una selección de experiencias "
-        "exclusivas para tu cuidado:\n\n"
-    )
-
-    for s in services_data:
-        # Solo mostramos el nombre del servicio con un estilo limpio
-        texto_premium += f"◦  _{s['name']}_\n"
-
-    texto_premium += "\n¿Cuál de ellas te gustaría disfrutar hoy?"
+    rprint(f"[green]📱 Catálogo desplegado con {len(shown_ids)} servicios.[/green]")
 
     return {
-        "messages": [AIMessage(content=texto_premium)],
-        "next_action": "FINISH", # 🛑 Se detiene para que el usuario responda
-        "shown_service_ids": [s['id'] for s in services_data]
+        "messages": [AIMessage(content=full_message)],
+        "shown_service_ids": shown_ids,
+        "next_action": "FINISH"
     }
