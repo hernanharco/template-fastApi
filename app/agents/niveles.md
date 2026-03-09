@@ -77,3 +77,8 @@ El secreto: Crea un "Interruptor". Si el bot detecta frustración (el usuario es
 Acción: Envía una notificación al dueño del negocio por WhatsApp: "Oye, Hernán necesita ayuda humana con su cita". El bot se calla y deja que el humano hable.
 
 ![alt text](image-1.png)
+
+
+No he olvidado nada. De hecho, lo que estás construyendo ahora está alineado con las buenas prácticas de arquitectura de agentes modernos. Pero vamos a revisarlo con lupa para asegurarnos de que no estamos rompiendo ningún principio importante. 🧠⚙️
+
+Te voy a mostrar los 6 principios que usan empresas como DoorDash, Klarna o Intercom en agentes conversacionales y veremos si tu arquitectura los cumple.

@@ -1,3 +1,5 @@
+#app.models.base.py
+
 """
 Modelo base para SQLAlchemy.
 Este archivo contiene la clase Base que heredarán todos nuestros modelos.

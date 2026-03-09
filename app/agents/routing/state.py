@@ -1,35 +1,46 @@
-from typing import Annotated, List, Optional, Union, Dict
+from datetime import date, datetime
+from typing import List, Optional, Dict, Any
 from typing_extensions import TypedDict
-from langgraph.graph.message import add_messages
 
-# --- REDUCERS (Los pegamentos de la memoria) ---
+from app.agents.routing.intent import Intent
 
-def merge_ids(old_ids: Optional[List[int]], new_ids: Optional[List[int]]) -> List[int]:
-    return new_ids if new_ids is not None and len(new_ids) > 0 else (old_ids or [])
 
-def merge_slots(old_slots: Optional[List[dict]], new_slots: Optional[List[dict]]) -> List[dict]:
-    return new_slots if new_slots is not None and len(new_slots) > 0 else (old_slots or [])
+class RoutingState(TypedDict, total=False):
 
-class RoutingState(TypedDict):
-    # Historial de chat
-    messages: Annotated[list, add_messages]
-    
-    # Memoria de Catálogo
-    shown_service_ids: Annotated[List[int], merge_ids]
-    selected_service_id: Optional[int]
-    
-    # 🌟 NUEVA INTELIGENCIA TEMPORAL (Extraída por rules.py)
-    selected_date: Optional[str]        # Formato: 2026-03-05
-    time_filter: Optional[str]          # Formato: 15:00
-    selection_preference: Optional[str]  # FIRST | LAST | ANY
-    
-    # Memoria de Booking (Horarios)
-    active_slots: Annotated[List[Dict], merge_slots] 
-    booking_for_name: Optional[str]
-    other_day_attempts: int
-    
-    # Control de flujo y usuario
-    next_action: str
+    # 1) Conversation memory
+    messages: List[Dict[str, Any]]
+    memories: Optional[str]
+
+    # 2) User data
     client_phone: str
     client_name: Optional[str]
+    client_id: Optional[int]
     is_new_user: bool
+    preferred_collaborators: List[int]
+
+    # 3) Flow control
+    intent: Optional[Intent]
+    next_action: Optional[str]
+    force_greeting: bool
+    wait_for_name: bool
+    response_text: Optional[str]
+
+    # 4) Catalog memory
+    shown_service_ids: List[int]
+    selected_service_id: Optional[int]
+
+    # 5) Temporal data
+    selected_date: Optional[date]
+    time_filter: Optional[str]
+    selection_preference: Optional[str]
+
+    # 6) Booking memory
+    active_slots: List[Dict[str, Any]]
+    selected_collaborator_id: Optional[int]
+    selected_datetime: Optional[datetime]
+    booking_for_name: Optional[str]
+    other_day_attempts: int
+
+    # 7) Confirmation/result
+    appointment_id: Optional[int]
+    booking_confirmed: bool

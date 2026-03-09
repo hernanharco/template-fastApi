@@ -1,3 +1,4 @@
+#app.schemas.client.py
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing import Optional, Dict, Any, List
 from datetime import datetime
