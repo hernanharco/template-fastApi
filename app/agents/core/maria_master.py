@@ -8,6 +8,13 @@ from app.agents.memory.memory_orchestrator import MemoryOrchestrator
 
 logger = logging.getLogger(__name__)
 
+# ── Versión del thread ────────────────────────────────────────────────────────
+# Incrementa este número cuando el thread se corrompa en desarrollo
+# para forzar un thread_id nuevo sin tocar la BD ni reiniciar procesos.
+# En producción siempre debe ser "" (string vacío).
+_THREAD_VERSION = "v3"
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 class MariaMaster:
 
@@ -16,7 +23,7 @@ class MariaMaster:
         self.assistant_id = "mariamaster"
 
     async def process_message(self, phone: str, user_input: str) -> Dict[str, Any]:
-        thread_id = ThreadManager.build_thread_id(phone)
+        thread_id = ThreadManager.build_thread_id(phone + _THREAD_VERSION)
 
         db = SessionLocal()
         memory = MemoryOrchestrator(db)

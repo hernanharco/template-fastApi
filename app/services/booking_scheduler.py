@@ -12,15 +12,44 @@ from app.services.availability import get_available_slots
 from app.services.appointment_manager import appointment_manager
 from app.schemas.appointments import AppointmentCreate
 from app.services.telegram import get_telegram_link
-from rich import print as rprint
+
+
+def _apply_hour_filter(slots: List[Dict], min_hour: Optional[int], max_hour: Optional[int]) -> List[Dict]:
+    """
+    Filtra slots por rango horario antes de tomar los primeros 2.
+    min_hour: hora mínima inclusiva (ej: 15 para "después de las 3pm")
+    max_hour: hora máxima exclusiva (ej: 12 para "antes de las 12")
+    """
+    if min_hour is None and max_hour is None:
+        return slots
+
+    filtered = []
+    for slot in slots:
+        hour = slot["start_time"].hour
+        if min_hour is not None and hour < min_hour:
+            continue
+        if max_hour is not None and hour >= max_hour:
+            continue
+        filtered.append(slot)
+    return filtered
 
 
 def get_booking_options_with_favorites(
-    db: Session, client_phone: str, service_id: int, target_date: Optional[date] = None
+    db: Session,
+    client_phone: str,
+    service_id: int,
+    target_date: Optional[date] = None,
+    min_hour: Optional[int] = None,   # filtro "después de las X"
+    max_hour: Optional[int] = None,   # filtro "antes de las X"
+    limit: Optional[int] = 2,         # None = sin límite (para first/last)
 ) -> Dict:
     """
-    SRP: Obtiene opciones de reserva priorizando colaboradores favoritos del cliente.
+    Obtiene opciones de reserva priorizando colaboradores favoritos del cliente.
     Devuelve exactamente 2 opciones para que el usuario elija.
+
+    Parámetros de filtro horario:
+    - min_hour: devuelve solo slots con hora >= min_hour (ej: 15 → después de las 3pm)
+    - max_hour: devuelve solo slots con hora < max_hour  (ej: 12 → antes de las 12)
     """
 
     # 1. Obtener cliente y sus favoritos
@@ -29,7 +58,6 @@ def get_booking_options_with_favorites(
         rprint("[red]❌ Cliente no encontrado[/red]")
         return {"error": "Cliente no encontrado"}
 
-    # Extraer IDs de colaboradores favoritos del metadata
     favorites = client.metadata_json.get("preferred_collaborator_ids", [])
     rprint(f"[cyan]📋 Favoritos del cliente {client.full_name}: {favorites}[/cyan]")
 
@@ -39,18 +67,19 @@ def get_booking_options_with_favorites(
         rprint("[red]❌ Servicio no encontrado[/red]")
         return {"error": "Servicio no encontrado"}
 
-    # 3. Determinar fecha objetivo (hoy si no se especifica)
+    # 3. Determinar fecha objetivo
     if not target_date:
         target_date = date.today()
 
-    rprint(
-        f"[blue]🎯 Buscando disponibilidad para:[/blue] {service.name} el {target_date}"
-    )
+    rprint(f"[blue]🎯 Buscando disponibilidad para:[/blue] {service.name} el {target_date}")
+    if min_hour is not None:
+        rprint(f"[blue]⏱ Filtro horario:[/blue] desde las {min_hour:02d}:00h")
+    if max_hour is not None:
+        rprint(f"[blue]⏱ Filtro horario:[/blue] hasta las {max_hour:02d}:00h")
 
-    # 4. Estrategia de búsqueda: Primero favoritos, luego cualquiera
     options = []
 
-    # Estrategia 1: Buscar slots con colaboradores favoritos
+    # Estrategia 1: Favoritos
     if favorites:
         rprint(f"[yellow]⭐ Buscando con colaboradores favoritos...[/yellow]")
         favorite_slots = []
@@ -64,44 +93,53 @@ def get_booking_options_with_favorites(
             )
             favorite_slots.extend(slots)
 
-        # Ordenar por hora y tomar los primeros 2
+        favorite_slots = _apply_hour_filter(favorite_slots, min_hour, max_hour)
         favorite_slots.sort(key=lambda x: x["start_time"])
-        options.extend(favorite_slots[:2])
+        options.extend(favorite_slots if limit is None else favorite_slots[:limit])
 
-    # Estrategia 2: Si no hay suficientes opciones con favoritos, buscar con cualquiera
+    # Estrategia 2: Cualquier colaborador si no hay suficientes
     if len(options) < 2:
         rprint(f"[yellow]🔍 Buscando con cualquier colaborador disponible...[/yellow]")
         all_slots = get_available_slots(
             db=db, target_date=target_date, service_id=service_id
         )
 
-        # Filtrar slots que ya no estén en options
+        # Aplicar filtro horario ANTES de tomar los primeros 2
+        all_slots = _apply_hour_filter(all_slots, min_hour, max_hour)
+
         existing_start_times = {opt["start_time"] for opt in options}
         additional_slots = [
             slot for slot in all_slots if slot["start_time"] not in existing_start_times
         ]
         additional_slots.sort(key=lambda x: x["start_time"])
 
-        # Completar hasta tener 2 opciones
-        remaining_needed = 2 - len(options)
-        options.extend(additional_slots[:remaining_needed])
+        if limit is None:
+            options.extend(additional_slots)
+        else:
+            remaining_needed = limit - len(options)
+            options.extend(additional_slots[:remaining_needed])
 
-    # 5. Formatear respuesta
+    # 5. Sin resultados
     if not options:
+        # Si teníamos filtro, informar que no hay en ese rango
+        filter_info = ""
+        if min_hour is not None:
+            filter_info = f" después de las {min_hour:02d}:00h"
+        elif max_hour is not None:
+            filter_info = f" antes de las {max_hour:02d}:00h"
+
         return {
             "success": False,
-            "message": f"No hay disponibilidad para {service.name} el {target_date.strftime('%d/%m/%Y')}",
+            "message": f"No hay disponibilidad para {service.name} el {target_date.strftime('%d/%m/%Y')}{filter_info}",
             "service": service.name,
             "date": target_date.strftime("%d/%m/%Y"),
-            "suggestions": [
-                "¿Quieres probar otro día?",
-                "¿Te gustaría ver la disponibilidad para mañana?",
-            ],
+            "has_hour_filter": min_hour is not None or max_hour is not None,
         }
 
-    # Formatear las 2 opciones
+    # 6. Formatear las 2 opciones
     formatted_options = []
-    for i, slot in enumerate(options[:2], 1):
+    cap = limit if limit is not None else len(options)
+    for i, slot in enumerate(options[:cap], 1):
         collaborator = (
             db.query(Collaborator)
             .filter(Collaborator.id == slot["collaborator_id"])
@@ -139,9 +177,7 @@ def get_booking_options_with_favorites(
 def get_next_available_dates(
     db: Session, service_id: int, days_ahead: int = 3
 ) -> List[Dict]:
-    """
-    SRP: Busca disponibilidad en los próximos días si no hay slots hoy.
-    """
+    """Busca disponibilidad en los próximos días si no hay slots hoy."""
     available_dates = []
     base_date = date.today()
 
@@ -169,32 +205,22 @@ async def confirm_booking_option(
     collaborator_id: int,
     selected_datetime: str,
 ) -> Dict:
-    """
-    SRP: Confirma y crea la cita para la opción seleccionada.
-    Genera mensaje con enlace a Telegram para recordatorios.
-    """
+    """Confirma y crea la cita para la opción seleccionada."""
     try:
-        # Parsear la fecha y hora seleccionada
         appointment_datetime = datetime.strptime(selected_datetime, "%Y-%m-%d %H:%M")
 
-        # 🚀 FIX CRÍTICO: Añadir timezone a las fechas para que coincida con el modelo
         from app.core.config import settings
         import pytz
 
         tz = pytz.timezone(settings.APP_TIMEZONE)
-
-        # Convertir a timezone-aware
         appointment_datetime = tz.localize(appointment_datetime)
 
-        # Obtener información del servicio PRIMERO
         service = db.query(Service).filter(Service.id == service_id).first()
         if not service:
             return {"success": False, "error": "Servicio no encontrado"}
 
-        # Calcular hora de fin basada en la duración del servicio
         end_time = appointment_datetime + timedelta(minutes=service.duration_minutes)
 
-        # Validar que la cita sea en el futuro (comparar con timezone-aware)
         now = datetime.now(tz)
         if appointment_datetime <= now:
             return {
@@ -202,12 +228,10 @@ async def confirm_booking_option(
                 "error": "La fecha seleccionada ya pasó. Por favor, elige una fecha futura.",
             }
 
-        # Obtener información del cliente
         client = db.query(Client).filter(Client.phone == client_phone).first()
         if not client:
             return {"success": False, "error": "Cliente no encontrado"}
 
-        # Crear el objeto AppointmentCreate
         appointment_data = AppointmentCreate(
             service_id=service_id,
             collaborator_id=collaborator_id,
@@ -216,50 +240,41 @@ async def confirm_booking_option(
             client_email=client.email,
             start_time=appointment_datetime,
             end_time=end_time,
-            source="ia",  # Indicar que la cita fue creada por la IA
+            source="ia",
         )
 
-        # Crear la cita usando el AppointmentManager
         rprint(f"[blue]📅 Creando cita para {client.full_name} - {service.name}[/blue]")
         new_appointment = await appointment_manager.create_full_appointment(
             db, appointment_data
         )
 
-        # Generar enlace de Telegram
         telegram_link = get_telegram_link(new_appointment.id)
 
-        # Construir mensaje de confirmación con enlace a Telegram
         if telegram_link:
-            telegram_message = f"""
-                🎉 *¡Cita Agendada Exitosamente!*
-
-                📅 *Fecha y hora*: {appointment_datetime.strftime('%d/%m/%Y a las %H:%M')}
-                💇‍♀️ *Servicio*: {service.name}
-
-                📱 *Para tus recordatorios*: 
-                Puedes gestionar tus recordatorios y recordatorios automáticos a través de Telegram haciendo clic en este enlace:
-                {telegram_link}
-
-                ¡Nos vemos pronto! 🌟"""
+            message = (
+                f"🎉 *¡Cita Agendada Exitosamente!*\n\n"
+                f"📅 *Fecha y hora*: {appointment_datetime.strftime('%d/%m/%Y a las %H:%M')}\n"
+                f"💇‍♀️ *Servicio*: {service.name}\n\n"
+                f"📱 *Para tus recordatorios*:\n"
+                f"Puedes gestionar tus recordatorios a través de Telegram:\n"
+                f"{telegram_link}\n\n"
+                f"¡Nos vemos pronto! 🌟"
+            )
         else:
-            telegram_message = f"""
-                🎉 *¡Cita Agendada Exitosamente!*
-
-                📅 *Fecha y hora*: {appointment_datetime.strftime('%d/%m/%Y a las %H:%M')}
-                💇‍♀️ *Servicio*: {service.name}
-                👨‍💼 *Profesional*: ID {collaborator_id}
-                ⏱️ *Duración*: {service.duration_minutes} minutos
-
-                📱 *Para recordatorios*: 
-                El servicio de recordatorios por Telegram estará disponible pronto. ¡Te avisaremos!
-
-                ¡Nos vemos pronto! 🌟"""
+            message = (
+                f"🎉 *¡Cita Agendada Exitosamente!*\n\n"
+                f"📅 *Fecha y hora*: {appointment_datetime.strftime('%d/%m/%Y a las %H:%M')}\n"
+                f"💇‍♀️ *Servicio*: {service.name}\n"
+                f"👨‍💼 *Profesional*: ID {collaborator_id}\n"
+                f"⏱️ *Duración*: {service.duration_minutes} minutos\n\n"
+                f"¡Nos vemos pronto! 🌟"
+            )
 
         rprint(f"[green]✅ Cita creada con ID: {new_appointment.id}[/green]")
 
         return {
             "success": True,
-            "message": telegram_message,
+            "message": message,
             "appointment": {
                 "id": new_appointment.id,
                 "service": service.name,

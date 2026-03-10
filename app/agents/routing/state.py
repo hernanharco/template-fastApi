@@ -31,7 +31,7 @@ class RoutingState(TypedDict, total=False):
 
     # 5) Temporal data
     selected_date: Optional[date]
-    time_filter: Optional[str]
+    time_filter: Optional[Dict[str, Any]]
     selection_preference: Optional[str]
 
     # 6) Booking memory

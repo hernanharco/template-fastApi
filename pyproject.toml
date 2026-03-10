@@ -45,19 +45,27 @@ dev = [
 [tool.poetry]
 package-mode = false
 
-# --- 🚀 COMANDOS PERSONALIZADOS (Tipo pnpm scripts) ---
+# --- 🚀 COMANDOS PERSONALIZADOS ---
 [tool.poe.tasks]
-dev = "uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload --reload-dir app --reload-include '*.py' --reload-include '*.env'" # Ejemplo: poetry run poe dev
-test = "pytest tests/ -v"
-setup-dev = "./setup.sh development"
-setup-prod = "./setup.sh production"
+
+# Servidores
+dev   = "uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload --reload-dir app --reload-include '*.py' --reload-include '*.env'"
+agent = "langgraph dev"
+start = {shell = "poetry run poe agent & poetry run poe dev"} #poetry run poe start
+
+# Tests
+test       = "pytest tests/ -v"
 test-agent = "python tests/test_agent.py"
+
+# Setup
+setup-dev  = "./setup.sh development"
+setup-prod = "./setup.sh production"
+
+# Agentes
 init-checkpoints = "python -m app.agents.core.init_checkpoints"
 
-# 📦 COMANDOS DE BASE DE DATOS (ALEMBIC)
-db-plan = "alembic revision --autogenerate -m"   # Ejemplo: poetry run poe db-plan "mensaje"
-db-migrate = "alembic upgrade head"
+# Base de datos (Alembic)
+db-plan     = "alembic revision --autogenerate -m"
+db-migrate  = "alembic upgrade head"
 db-rollback = "alembic downgrade -1"
-db-history = "alembic history --verbose"
-
-# para activar el LangSmith: poetry run langgraph dev
+db-history  = "alembic history --verbose"

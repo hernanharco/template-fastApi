@@ -11,4 +11,5 @@ class Intent(str, Enum):
     CATALOG = "CATALOG"
     BOOKING = "BOOKING"
     CONFIRMATION = "CONFIRMATION"
+    TIME_FILTER  = "TIME_FILTER"
     FINISH = "FINISH"

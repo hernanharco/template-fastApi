@@ -20,15 +20,7 @@ async def verify_whatsapp_webhook(
     hub_verify_token: str = Query(None, alias="hub.verify_token"),
     hub_challenge: str = Query(None, alias="hub.challenge"),
 ):
-    """
-    Endpoint de verificación para WhatsApp Cloud API.
-    """
-
     console.print("[cyan]Webhook verification request received[/cyan]")
-    console.print(f"hub.mode={hub_mode}")
-    console.print(f"hub.verify_token={hub_verify_token}")
-    console.print(f"hub.challenge={hub_challenge}")
-
     if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
         console.print("[green]Webhook verified successfully[/green]")
         return Response(content=hub_challenge, media_type="text/plain")
@@ -47,28 +39,24 @@ async def handle_whatsapp_message(
     try:
         body = await request.json()
 
-        console.print("[cyan]Webhook body recibido:[/cyan]")
-        console.print(body)
-
+        # Filtrar eventos de status (sent/delivered/read) antes de imprimir
         entry = body.get("entry", [{}])[0]
         change = entry.get("changes", [{}])[0]
         value = change.get("value", {})
 
         if "messages" not in value:
-            console.print("[yellow]Evento ignorado: no contiene messages[/yellow]")
             return {"status": "ignored"}
 
         message_data = value["messages"][0]
-
         user_phone = message_data.get("from")
         user_text = message_data.get("text", {}).get("body")
 
-        console.print(f"[magenta]PHONE:[/magenta] {user_phone}")
-        console.print(f"[magenta]TEXT:[/magenta] {user_text}")
-
         if not user_text:
-            console.print("[yellow]Evento ignorado: mensaje sin texto[/yellow]")
             return {"status": "ignored"}
+
+        # Solo imprime cuando hay un mensaje real
+        console.print(f"\n[magenta]PHONE:[/magenta] {user_phone}")
+        console.print(f"[magenta]TEXT:[/magenta] {user_text}")
 
         await send_presence(user_phone, "typing_on")
 
@@ -77,7 +65,7 @@ async def handle_whatsapp_message(
             user_input=user_text
         )
 
-        console.print("[blue]Response data MariaMaster:[/blue]")
+        console.print("[blue]Response:[/blue]")
         console.print(response_data)
 
         ai_response_text = response_data.get("text")
