@@ -9,8 +9,9 @@ from app.agents.nodes.greeting_node import greeting_node
 from app.agents.nodes.catalog_node import catalog_node
 from app.agents.nodes.booking_node import booking_node
 from app.agents.nodes.confirmation_node import confirmation_node
+from app.agents.nodes.finish_node import finish_node           # ← nuevo
 from app.agents.nodes.time_parser_node import time_parser_node
-from app.agents.nodes.time_filter_node import time_filter_node  # ← nuevo
+from app.agents.nodes.time_filter_node import time_filter_node
 
 
 logger = logging.getLogger(__name__)
@@ -25,8 +26,9 @@ workflow.add_node("greeting",        greeting_node)
 workflow.add_node("catalog",         catalog_node)
 workflow.add_node("booking",         booking_node)
 workflow.add_node("confirmation",    confirmation_node)
+workflow.add_node("finish",          finish_node)              # ← nuevo
 workflow.add_node("time_parser",     time_parser_node)
-workflow.add_node("time_filter",     time_filter_node)   # ← nuevo
+workflow.add_node("time_filter",     time_filter_node)
 
 
 # ── Helpers de routing ───────────────────────────────────────────────────────
@@ -65,7 +67,7 @@ workflow.add_conditional_edges(
     "greeting",
     greeting_next_step,
     {
-        "WAIT":   END,
+        "WAIT":    END,
         "CATALOG": "catalog",
     },
 )
@@ -94,18 +96,21 @@ workflow.add_conditional_edges(
     _intent,
     {
         "BOOKING":      "booking",      # usuario pide otro día
-        "TIME_FILTER":  "time_filter",  # ← nuevo: usuario pide preferencia horaria
+        "TIME_FILTER":  "time_filter",  # usuario pide preferencia horaria
         "CONFIRMATION": END,
-        "FINISH":       END,
+        "FINISH":       "finish",       # ← cita confirmada → finish_node
     },
 )
+
+# finish_node limpia estado y añade follow-up → termina el turno
+workflow.add_edge("finish", END)
 
 # time_filter guarda el filtro y manda a booking para buscar slots nuevos
 workflow.add_conditional_edges(
     "time_filter",
     _intent,
     {
-        "BOOKING": "booking",
+        "BOOKING":      "booking",
         "CONFIRMATION": END,
     },
 )
