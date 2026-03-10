@@ -1,5 +1,5 @@
 import json
-from datetime import time, date, timedelta
+from datetime import time
 from typing import Optional
 
 from pydantic import BaseModel
@@ -16,25 +16,7 @@ class TimeFilterResult(BaseModel):
     mode: str  # "after" | "before" | "between" | "first" | "last" | "unknown"
     after_hour: Optional[int] = None
     before_hour: Optional[int] = None
-    weekday: Optional[int] = None  # 0=lunes ... 6=domingo
     is_time_request: bool = False
-
-
-# ─────────────────────────────────────────
-# Detección de día de semana en texto
-# ─────────────────────────────────────────
-
-WEEKDAY_MAP = {
-    "lunes": 0, "martes": 1, "miercoles": 2, "miércoles": 2,
-    "jueves": 3, "viernes": 4, "sabado": 5, "sábado": 5, "domingo": 6,
-}
-
-def _extract_weekday(text: str) -> Optional[int]:
-    """Busca un día de la semana dentro del texto normalizado."""
-    for name, num in WEEKDAY_MAP.items():
-        if name in text:
-            return num
-    return None
 
 
 # ─────────────────────────────────────────
@@ -44,6 +26,7 @@ def _extract_weekday(text: str) -> Optional[int]:
 FIRST_KEYWORDS = [
     "primera hora", "lo mas temprano", "lo más temprano",
     "mas temprano", "más temprano", "primer horario", "a primera",
+    "bien temprano", "temprano",
 ]
 
 LAST_KEYWORDS = [
@@ -52,22 +35,60 @@ LAST_KEYWORDS = [
     "lo ultimo", "lo último",
 ]
 
+MORNING_KEYWORDS = [
+    "por la mañana", "para la mañana", "en la mañana",
+    "a la mañana", "de mañana", "por la manana", "para la manana",
+]
+
+AFTERNOON_KEYWORDS = [
+    "por la tarde", "para la tarde", "en la tarde",
+    "a la tarde", "de tarde", "tienes para la tarde",
+    "hay para la tarde", "tenés para la tarde",
+]
+
+NIGHT_KEYWORDS = [
+    "por la noche", "para la noche", "en la noche",
+    "a la noche", "de noche",
+]
+
+MIDDAY_KEYWORDS = [
+    "al mediodia", "al mediodía", "a mediodia", "a mediodía",
+    "para el mediodia", "para el mediodía",
+]
+
 
 def _check_keywords(text: str) -> Optional[TimeFilterResult]:
     """
-    Detecta keywords de primera/última hora SIN LLM.
-    También extrae el día de la semana si viene en el mismo texto.
-    Ej: "jueves a última hora" → mode=last, weekday=3, is_time_request=True
+    Detecta preferencias de FRANJA HORARIA sin LLM.
+    No detecta fechas ni días — eso es responsabilidad de time_parser_node.
     """
     normalized = text.lower().strip()
-    weekday = _extract_weekday(normalized)
+
+    # Frases compuestas primero para evitar falsos positivos
+    for kw in MORNING_KEYWORDS:
+        if kw in normalized:
+            return TimeFilterResult(mode="before", before_hour=13, is_time_request=True)
+
+    for kw in AFTERNOON_KEYWORDS:
+        if kw in normalized:
+            return TimeFilterResult(mode="after", after_hour=13, is_time_request=True)
+
+    for kw in NIGHT_KEYWORDS:
+        if kw in normalized:
+            return TimeFilterResult(mode="after", after_hour=19, is_time_request=True)
+
+    for kw in MIDDAY_KEYWORDS:
+        if kw in normalized:
+            return TimeFilterResult(mode="between", after_hour=12, before_hour=14, is_time_request=True)
 
     for kw in FIRST_KEYWORDS:
         if kw in normalized:
-            return TimeFilterResult(mode="first", is_time_request=True, weekday=weekday)
+            return TimeFilterResult(mode="first", is_time_request=True)
+
     for kw in LAST_KEYWORDS:
         if kw in normalized:
-            return TimeFilterResult(mode="last", is_time_request=True, weekday=weekday)
+            return TimeFilterResult(mode="last", is_time_request=True)
+
     return None
 
 
@@ -98,7 +119,15 @@ Reglas estrictas:
   Ej: "el viernes después de las 3" → is_time_request: true, mode: "after", after_hour: 15, weekday: 4
 - IMPORTANTE: si hay cualquier referencia a hora (antes, después, entre, primera, última) → is_time_request SIEMPRE es true
 - Si menciona SOLO un día sin ninguna referencia horaria → is_time_request: false, weekday: número del día
-- Usa siempre formato 24h. Si el usuario dice "3" o "las 3" sin AM/PM, asume 15:00"""
+- Usa siempre formato 24h. Si el usuario dice "3" o "las 3" sin AM/PM, asume 15:00
+
+Franjas horarias coloquiales en español (MUY IMPORTANTE):
+- "por la mañana" / "para la mañana" / "en la mañana" / "a la mañana" → is_time_request: true, mode: "before", before_hour: 13
+- "por la tarde" / "para la tarde" / "en la tarde" / "a la tarde" / "tienes para la tarde" → is_time_request: true, mode: "after", after_hour: 13
+- "por la noche" / "para la noche" / "en la noche" / "de noche" → is_time_request: true, mode: "after", after_hour: 19
+- "al mediodía" / "a mediodía" / "para el mediodía" → is_time_request: true, mode: "between", after_hour: 12, before_hour: 14
+- "temprano" / "bien temprano" → is_time_request: true, mode: "first"
+- Cualquier variación de estas frases (con o sin "tienes", "hay", "tenés", signos de pregunta) aplica igual"""
 
 
 async def _parse_with_llm(user_text: str) -> TimeFilterResult:
@@ -110,6 +139,11 @@ async def _parse_with_llm(user_text: str) -> TimeFilterResult:
     response = await llm.ainvoke(messages)
     raw = response.content.strip().replace("```json", "").replace("```", "").strip()
     data = json.loads(raw)
+
+    # Descartar campos que ya no maneja TimeFilterResult (ej: weekday)
+    allowed = {"mode", "after_hour", "before_hour", "is_time_request"}
+    data = {k: v for k, v in data.items() if k in allowed}
+
     result = TimeFilterResult(**data)
 
     # Salvaguarda: si hay modo horario real pero is_time_request=False, corregir
@@ -192,33 +226,28 @@ def apply_time_filter(slots: list, filter_result: TimeFilterResult) -> list:
 # ─────────────────────────────────────────
 
 async def time_filter_node(state: RoutingState) -> dict:
+    """
+    Responsabilidad única: detectar franja horaria del mensaje del usuario.
+    NO resuelve fechas — eso es trabajo de time_parser_node.
+    Si detecta franja → guarda time_filter y manda a booking para rebuscar.
+    Si no detecta nada útil → limpia filtro y manda a booking igual.
+    """
     messages = state.get("messages", [])
     user_text = (messages[-1].get("content") or "").strip() if messages else ""
 
     result = await parse_time_filter(user_text)
 
-    # Calcular selected_date desde weekday si el LLM/keyword lo extrajo
-    selected_date = state.get("selected_date")
-    if result.weekday is not None:
-        today = date.today()
-        days_ahead = (result.weekday - today.weekday()) % 7
-        if days_ahead == 0:
-            days_ahead = 7  # si es hoy, ir a la próxima semana
-        selected_date = today + timedelta(days=days_ahead)
-
     if not result.is_time_request:
-        # Solo día sin hora → ir a booking con la fecha, sin filtro horario
         return {
             "time_filter": None,
-            "selected_date": selected_date,
             "active_slots": [],
             "intent": Intent.BOOKING,
+            # selected_date NO se toca — time_parser ya la maneja
         }
 
-    # Tiene preferencia horaria → guardar filtro y fecha, ir a booking
     return {
         "time_filter": result.model_dump(),
-        "selected_date": selected_date,
         "active_slots": [],
         "intent": Intent.BOOKING,
+        # selected_date NO se toca — time_parser ya la maneja
     }

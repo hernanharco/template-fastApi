@@ -17,9 +17,15 @@ class ParsedDate(BaseModel):
 
 
 OTRO_DIA_KEYWORDS = {
+    # Piden otro día explícitamente
     "otro dia", "otro día", "otra fecha", "otra hora",
     "diferente dia", "diferente día", "cambia el dia",
     "no ese dia", "no ese día", "otro momento",
+    # Piden otro horario sin especificar cuál
+    "a otra hora", "en otro horario", "otro horario",
+    "a esa hora no", "a esas horas no", "esa hora no",
+    "no a esa hora", "no me viene esa hora",
+    "no puedo a esa hora", "no puedo ese dia", "no puedo ese día",
 }
 
 # Solo los nombres base - la búsqueda es por contenido, no exacta
@@ -66,7 +72,7 @@ def parse_time_request(user_text: str) -> dict:
     """
     normalized = user_text.lower().strip()
 
-    # 1. "otro dia", "otra fecha", etc.
+    # 1. "otro dia", "otra fecha", "a esa hora no", etc.
     if normalized in OTRO_DIA_KEYWORDS:
         return {"needs_date": True, "target_date": None, "clarification_needed": True}
 
@@ -124,13 +130,14 @@ Ejemplos:
 
 def time_parser_node(state: RoutingState) -> RoutingState:
     """
-    Solo se activa cuando el usuario ya vio slots y pide otro día.
-    Si no hay active_slots previos, pasa directo sin hacer nada.
+    Solo se activa cuando el usuario ya vio slots y pide otro día u horario.
+    Usamos selected_service_id como señal de contexto activo (active_slots
+    ya viene vacío porque el router lo limpió antes de llegar aquí).
     """
-    active_slots = state.get("active_slots", [])
+    selected_service_id = state.get("selected_service_id")
     last_message = state.get("messages", [])
 
-    if not active_slots:
+    if not selected_service_id:
         return {"intent": Intent.BOOKING}
 
     if not last_message:
@@ -156,8 +163,8 @@ def time_parser_node(state: RoutingState) -> RoutingState:
 
     if result.get("clarification_needed"):
         return {
-            "response_text": "¿Para qué día te gustaría? Por ejemplo: mañana, el lunes, el martes...",
-            "intent": Intent.CONFIRMATION,
+            "response_text": "¿Para qué día o a qué hora te vendría mejor? Por ejemplo: mañana, el lunes, después de las 3...",
+            "intent": Intent.FINISH,
         }
 
     return {"intent": Intent.BOOKING}

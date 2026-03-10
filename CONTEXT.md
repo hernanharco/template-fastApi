@@ -1,7 +1,4 @@
 # CoreAppointment Backend - Contexto Técnico Completo
-@codebase crea un archivo CONTEXT.md en la raíz del proyecto 
-con un resumen técnico completo: estructura, flujos de LangGraph, 
-modelos Pydantic, estado actual y lo que falta por implementar
 
 ## 📋 Resumen del Proyecto
 
@@ -57,45 +54,38 @@ START → customer_lookup → router → {
 ```
 
 ### Nodos del Sistema
-1. **customer_lookup_node**: Identificación/registro de clientes
-2. **router_node**: Enrutamiento inteligente de intenciones
-3. **greeting_node**: Saludos y recolección de nombre
-4. **catalog_node**: Mostrar y seleccionar servicios
-5. **booking_node**: Gestión de disponibilidad y horarios
-6. **confirmation_node**: Confirmación final de reserva
 
-### Estados del Sistema (RoutingState)
-```python
-{
-    # Memoria conversacional
-    "messages": List[Dict],
-    "memories": Optional[str],
-    
-    # Datos del usuario
-    "client_phone": str,
-    "client_name": Optional[str],
-    "client_id": Optional[int],
-    "preferred_collaborators": List[int],
-    
-    # Control de flujo
-    "intent": Optional[Intent],
-    "selected_service_id": Optional[int],
-    "selected_date": Optional[date],
-    "active_slots": List[Dict],
-    "selected_datetime": Optional[datetime],
-    
-    # Confirmación
-    "appointment_id": Optional[int],
-    "booking_confirmed": bool
-}
-```
+### Nodos del Sistema
 
-### Intenciones (Intent Enum)
-- `GREETING`: Saludos e identificación
-- `CATALOG`: Exploración de servicios
-- `BOOKING`: Proceso de reserva
-- `CONFIRMATION`: Confirmación final
-- `FINISH`: Fin del flujo
+1. **booking_node**: Nodo de booking
+2. **catalog_node**: 
+    Nodo responsable de:
+    1. Mostrar catálogo cuando aún no hay servicio elegido
+    2. Resolver el texto del usuario a un servicio real
+    3. Pasar a BOOKING cuando el usuario ya eligió servicio
+    
+3. **confirmation_node**: Nodo de confirmation
+4. **customer_lookup_node**: 
+    Busca o crea al cliente en base de datos usando su teléfono.
+    Si el cliente aún tiene el nombre por defecto, marca wait_for_name=True
+    para que el flujo de greeting solicite su nombre.
+    
+5. **finish_node**: 
+    Nodo ejecutado tras confirmar una cita exitosamente.
+    Responsabilidades (SRP):
+      - Adjuntar pregunta de seguimiento al mensaje de confirmación.
+      - Limpiar el estado de la conversación para un nuevo ciclo.
+      - Marcar intent como CATALOG para que el router sepa que
+        el próximo mensaje del usuario debe ir al catálogo.
+    
+6. **greeting_node**: Nodo de greeting
+7. **router_node**: Nodo de router
+8. **time_filter_node**: Nodo de time_filter
+9. **time_parser_node**: 
+    Solo se activa cuando el usuario ya vio slots y pide otro día.
+    Si no hay active_slots previos, pasa directo sin hacer nada.
+    
+
 
 ## 📊 Modelos de Datos SQLAlchemy
 
@@ -287,15 +277,43 @@ class Service(Base):
 ## 🔧 Modelos Pydantic
 
 ### Schemas de Agentes
-- **CatalogServiceItem**: Items del catálogo de servicios
-- **BookingOption**: Opciones de disponibilidad
-- **ClientLookupResponse**: Respuesta de búsqueda de clientes
-- **SlotValidationResponse**: Validación de slots de tiempo
 
-### Schemas de API
-- **ServiceCreate/Read/Update**: CRUD de servicios
-- **BusinessHoursCreate/Read**: Gestión de horarios
-- **AppointmentRead**: Lectura de citas
+### Schemas de Agentes
+
+- **ServiceReadSimple** (appointments)
+- **AppointmentBase** (appointments)
+- **DepartmentReadSimple** (appointments)
+- **AppointmentRead** (appointments)
+- **AppointmentUpdate** (appointments)
+- **TimeSlot** (appointments)
+- **AvailableSlotsResponse** (appointments)
+- **DayCountResponse** (appointments)
+- **TimeSlotBase** (business_hours)
+- **BusinessHoursBase** (business_hours)
+- **BusinessHoursUpdate** (business_hours)
+- **TimeSlotUpdate** (business_hours)
+- **BulkBusinessHoursUpdate** (business_hours)
+- **ClientBase** (client)
+- **ClientUpdate** (client)
+- **CollaboratorBase** (collaborators)
+- **CollaboratorUpdate** (collaborators)
+- **DepartmentBase** (department)
+- **DepartmentUpdate** (department)
+- **ReminderBase** (reminder)
+- **ServiceBase** (services)
+- **ServiceUpdate** (services)
+- **AppointmentData** (appointments)
+- **AppointmentConfirmationOutput** (appointments)
+- **BookingOption** (booking)
+- **BookingOptionsResponse** (booking)
+- **SlotValidationResponse** (booking)
+- **CatalogServiceItem** (catalog)
+- **CatalogInput** (catalog)
+- **CatalogOutput** (catalog)
+- **ClientLookupResponse** (client)
+- **GreetingInput** (greeting)
+- **GreetingOutput** (greeting)
+
 
 ## 🚀 Estado Actual del Sistema
 
