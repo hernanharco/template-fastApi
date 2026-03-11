@@ -13,6 +13,32 @@ from app.services.appointment_manager import appointment_manager
 from app.schemas.appointments import AppointmentCreate
 from app.services.telegram import get_telegram_link
 
+def _get_favorites(client: Client) -> list:
+    """
+    Extrae preferred_collaborator_ids de metadata_json de forma segura.
+    Maneja tanto dict como string JSON.
+    """
+    import json
+
+    raw = client.metadata_json
+    if not raw:
+        return []
+
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    # Soporta tanto {"preferred_collaborator_ids": [...]}
+    # como {"profile": {"preferred_collaborator_ids": [...]}}
+    if "preferred_collaborator_ids" in raw:
+        return raw["preferred_collaborator_ids"]
+
+    if "profile" in raw and isinstance(raw["profile"], dict):
+        return raw["profile"].get("preferred_collaborator_ids", [])
+
+    return []
 
 def _apply_hour_filter(slots: List[Dict], min_hour: Optional[int], max_hour: Optional[int]) -> List[Dict]:
     """
@@ -58,7 +84,7 @@ def get_booking_options_with_favorites(
         rprint("[red]❌ Cliente no encontrado[/red]")
         return {"error": "Cliente no encontrado"}
 
-    favorites = client.metadata_json.get("preferred_collaborator_ids", [])
+    favorites = _get_favorites(client)
     rprint(f"[cyan]📋 Favoritos del cliente {client.full_name}: {favorites}[/cyan]")
 
     # 2. Obtener información del servicio

@@ -12,6 +12,7 @@ from app.agents.nodes.confirmation_node import confirmation_node
 from app.agents.nodes.finish_node import finish_node
 from app.agents.nodes.time_parser_node import time_parser_node
 from app.agents.nodes.time_filter_node import time_filter_node
+from app.agents.nodes.favorite_fallback_node import favorite_fallback_node
 
 
 logger = logging.getLogger(__name__)
@@ -20,15 +21,16 @@ workflow = StateGraph(RoutingState)
 
 # ── Nodos ─────────────────────────────────────────────────────────────────────
 
-workflow.add_node("customer_lookup", customer_lookup_node)
-workflow.add_node("router",          router_node)
-workflow.add_node("greeting",        greeting_node)
-workflow.add_node("catalog",         catalog_node)
-workflow.add_node("booking",         booking_node)
-workflow.add_node("confirmation",    confirmation_node)
-workflow.add_node("finish",          finish_node)
-workflow.add_node("time_parser",     time_parser_node)
-workflow.add_node("time_filter",     time_filter_node)
+workflow.add_node("customer_lookup",   customer_lookup_node)
+workflow.add_node("router",            router_node)
+workflow.add_node("greeting",          greeting_node)
+workflow.add_node("catalog",           catalog_node)
+workflow.add_node("booking",           booking_node)
+workflow.add_node("confirmation",      confirmation_node)
+workflow.add_node("finish",            finish_node)
+workflow.add_node("time_parser",       time_parser_node)
+workflow.add_node("time_filter",       time_filter_node)
+workflow.add_node("favorite_fallback", favorite_fallback_node)
 
 
 # ── Helpers de routing ────────────────────────────────────────────────────────
@@ -46,7 +48,7 @@ def greeting_next_step(state: RoutingState) -> str:
     return "CATALOG"
 
 
-# ── Edges ──────────────────────────────────────────────────────────────────────
+# ── Edges ─────────────────────────────────────────────────────────────────────
 
 workflow.add_edge(START, "customer_lookup")
 workflow.add_edge("customer_lookup", "router")
@@ -60,7 +62,7 @@ workflow.add_conditional_edges(
         "BOOKING":      "booking",
         "CONFIRMATION": "confirmation",
         "TIME_FILTER":  "time_filter",
-        "TIME_PARSER":  "time_parser",   # ← nuevo
+        "TIME_PARSER":  "time_parser",
         "FINISH":       END,
     },
 )
@@ -87,9 +89,19 @@ workflow.add_conditional_edges(
     "booking",
     _intent,
     {
-        "CONFIRMATION": END,
-        "CATALOG":      "catalog",
-        "FINISH":       END,
+        "FAVORITE_FALLBACK": "favorite_fallback",
+        "CONFIRMATION":      END,
+        "CATALOG":           "catalog",
+        "FINISH":            END,
+    },
+)
+
+workflow.add_conditional_edges(          # ← único cambio respecto a tu versión
+    "favorite_fallback",
+    _intent,
+    {
+        "CONFIRMATION": END,   # muestra el mensaje y espera respuesta del usuario
+        "FINISH":       END,   # sin opciones disponibles
     },
 )
 
@@ -121,7 +133,7 @@ workflow.add_conditional_edges(
     {
         "BOOKING":      "booking",
         "CONFIRMATION": END,
-        "FINISH":       END,   # ← cuando pide aclaración de fecha
+        "FINISH":       END,
     },
 )
 

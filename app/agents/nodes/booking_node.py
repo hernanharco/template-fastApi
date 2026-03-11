@@ -33,11 +33,6 @@ def _filter_description(filter_result: TimeFilterResult) -> str:
 
 
 def _extract_hour_range(filter_result: TimeFilterResult):
-    """
-    Convierte TimeFilterResult en (min_hour, max_hour) para el scheduler.
-    Para 'first' y 'last' devuelve (None, None) — necesitamos todos los slots
-    del día para luego seleccionar el primero o último manualmente.
-    """
     mode = filter_result.mode
     if mode == "after":
         return filter_result.after_hour, None
@@ -49,11 +44,6 @@ def _extract_hour_range(filter_result: TimeFilterResult):
 
 
 def _apply_first_last(slots: list, mode: str) -> list:
-    """
-    Para mode='first' devuelve solo el slot más temprano.
-    Para mode='last' devuelve solo el slot más tardío.
-    Los slots ya vienen ordenados por hora desde el scheduler.
-    """
     if not slots:
         return slots
     if mode == "first":
@@ -84,17 +74,14 @@ def booking_node(state: RoutingState) -> RoutingState:
 
     try:
         target_date = state.get("selected_date") or date.today()
+        preferred = state.get("preferred_collaborators") or []  # ← NUEVO
 
-        # Extraer filtro horario del estado si existe
         time_filter_data = state.get("time_filter")
         filter_result = TimeFilterResult(**time_filter_data) if time_filter_data else None
         min_hour, max_hour = _extract_hour_range(filter_result) if filter_result else (None, None)
         filter_desc = _filter_description(filter_result) if filter_result else None
-
-        # Para first/last necesitamos todos los slots del día sin límite
         needs_all_slots = filter_result and filter_result.mode in ("first", "last")
 
-        # ── Buscar slots con filtro horario aplicado desde el origen ─────────
         result = get_booking_options_tool(
             db=db,
             client_phone=client_phone,
@@ -105,7 +92,26 @@ def booking_node(state: RoutingState) -> RoutingState:
             limit=None if needs_all_slots else 2,
         )
 
-        # ── Sin resultados: buscar en días siguientes con el mismo filtro ─────
+        # ── NUEVO: favorito sin slots → delegar al nodo especializado ─────────
+        # Se activa solo cuando hay favorito Y no hay resultados.
+        # El fallback genérico de días siguientes NO aplica aquí porque
+        # favorite_fallback_node maneja ambas alternativas en un solo mensaje.
+        if preferred:
+            favorite_got_slot = result.success and any(
+                opt.collaborator_id in preferred
+                for opt in (result.options or [])
+            )
+            if not favorite_got_slot:
+                return {
+                    "intent": Intent.FAVORITE_FALLBACK,
+                    "selected_service_id": service_id,
+                    "selected_date": target_date,
+                    "client_phone": client_phone,
+                    "preferred_collaborators": preferred,
+                    "time_filter": None,
+                }
+
+        # ── Sin resultados Y sin favorito: buscar en días siguientes ──────────
         if not result.success or not result.options:
             original_date_text = target_date.strftime("%d/%m/%Y")
             found_result = None
@@ -142,12 +148,10 @@ def booking_node(state: RoutingState) -> RoutingState:
                     for option in result.options
                 ]
 
-                # Aplicar first/last si aplica
                 if filter_result and filter_result.mode in ("first", "last"):
                     active_slots = _apply_first_last(active_slots, filter_result.mode)
 
                 if filter_result:
-                    # Había filtro: explicar que el día pedido no tenía y se buscó otro
                     message = (
                         f"El *{original_date_text}* no tengo horarios disponibles "
                         f"{filter_desc} para *{service_name}* 😕\n\n"
@@ -204,8 +208,6 @@ def booking_node(state: RoutingState) -> RoutingState:
             for option in result.options
         ]
 
-        # Para 'first' y 'last', el scheduler trae todos los slots sin filtrar
-        # → aquí seleccionamos el primero o último del día
         if filter_result and filter_result.mode in ("first", "last"):
             active_slots = _apply_first_last(active_slots, filter_result.mode)
 
