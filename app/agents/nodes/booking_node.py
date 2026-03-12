@@ -6,41 +6,8 @@ from app.agents.routing.state import RoutingState
 from app.agents.formatters.booking_options_formatter import BookingOptionsFormatter
 from app.agents.tools.get_booking_options_tool import get_booking_options_tool
 from app.agents.nodes.time_filter_node import TimeFilterResult
+from app.agents.utils.time_filter_utils import extract_hour_range, filter_description
 from app.db.session import SessionLocal
-
-
-def _hour_label(hour: int) -> str:
-    suffix = "AM" if hour < 12 else "PM"
-    display = hour if hour <= 12 else hour - 12
-    if display == 0:
-        display = 12
-    return f"{display}:00 {suffix}"
-
-
-def _filter_description(filter_result: TimeFilterResult) -> str:
-    mode = filter_result.mode
-    if mode == "after" and filter_result.after_hour is not None:
-        return f"después de las {_hour_label(filter_result.after_hour)}"
-    if mode == "before" and filter_result.before_hour is not None:
-        return f"antes de las {_hour_label(filter_result.before_hour)}"
-    if mode == "between" and filter_result.after_hour and filter_result.before_hour:
-        return f"entre las {_hour_label(filter_result.after_hour)} y las {_hour_label(filter_result.before_hour)}"
-    if mode == "first":
-        return "a primera hora"
-    if mode == "last":
-        return "a última hora"
-    return "con esa preferencia"
-
-
-def _extract_hour_range(filter_result: TimeFilterResult):
-    mode = filter_result.mode
-    if mode == "after":
-        return filter_result.after_hour, None
-    if mode == "before":
-        return None, filter_result.before_hour
-    if mode == "between":
-        return filter_result.after_hour, filter_result.before_hour
-    return None, None
 
 
 def _apply_first_last(slots: list, mode: str) -> list:
@@ -74,12 +41,12 @@ def booking_node(state: RoutingState) -> RoutingState:
 
     try:
         target_date = state.get("selected_date") or date.today()
-        preferred = state.get("preferred_collaborators") or []  # ← NUEVO
+        preferred = state.get("preferred_collaborators") or []
 
         time_filter_data = state.get("time_filter")
         filter_result = TimeFilterResult(**time_filter_data) if time_filter_data else None
-        min_hour, max_hour = _extract_hour_range(filter_result) if filter_result else (None, None)
-        filter_desc = _filter_description(filter_result) if filter_result else None
+        min_hour, max_hour = extract_hour_range(filter_result) if filter_result else (None, None)
+        filter_desc = filter_description(filter_result) if filter_result else None
         needs_all_slots = filter_result and filter_result.mode in ("first", "last")
 
         result = get_booking_options_tool(
@@ -92,10 +59,7 @@ def booking_node(state: RoutingState) -> RoutingState:
             limit=None if needs_all_slots else 2,
         )
 
-        # ── NUEVO: favorito sin slots → delegar al nodo especializado ─────────
-        # Se activa solo cuando hay favorito Y no hay resultados.
-        # El fallback genérico de días siguientes NO aplica aquí porque
-        # favorite_fallback_node maneja ambas alternativas en un solo mensaje.
+        # ── Favorito sin slots → delegar al nodo especializado ───────────────
         if preferred:
             favorite_got_slot = result.success and any(
                 opt.collaborator_id in preferred
@@ -108,10 +72,10 @@ def booking_node(state: RoutingState) -> RoutingState:
                     "selected_date": target_date,
                     "client_phone": client_phone,
                     "preferred_collaborators": preferred,
-                    "time_filter": None,
+                    "time_filter": time_filter_data,
                 }
 
-        # ── Sin resultados Y sin favorito: buscar en días siguientes ──────────
+        # ── Sin resultados Y sin favorito: buscar en días siguientes ─────────
         if not result.success or not result.options:
             original_date_text = target_date.strftime("%d/%m/%Y")
             found_result = None
@@ -158,11 +122,9 @@ def booking_node(state: RoutingState) -> RoutingState:
                         f"El próximo día disponible {filter_desc} es el *{new_date_text}*:\n\n"
                     )
                     for slot in active_slots:
-                        message += f"{slot['option_number']}. {slot['time']}\n"
-                    message += "\nResponde con *1*"
-                    if len(active_slots) > 1:
-                        message += " o *2*"
-                    message += " para confirmar, o dime otro día si prefieres."
+                        message += f"  *{slot['option_number']}.* {slot['time']}\n"
+                    reply_hint = BookingOptionsFormatter._build_reply_hint(active_slots)
+                    message += f"\nResponde {reply_hint} para confirmar, o dime otro día si prefieres."
                 else:
                     message = BookingOptionsFormatter.format_options(
                         service_name=service_name,
@@ -197,7 +159,7 @@ def booking_node(state: RoutingState) -> RoutingState:
                     "time_filter": None,
                 }
 
-        # ── Slots encontrados en target_date ──────────────────────────────────
+        # ── Slots encontrados en target_date ─────────────────────────────────
         active_slots = [
             {
                 "option_number": option.option_number,

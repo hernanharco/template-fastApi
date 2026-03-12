@@ -4,22 +4,35 @@ from app.agents.routing.state import RoutingState
 
 GREETINGS = {"hola", "buenas", "buenos dias", "buenas tardes", "menu", "inicio", "reiniciar"}
 
-# Franja horaria → time_filter_node
 TIME_FILTER_KEYWORDS = [
     "tarde", "noche", "temprano",
     "antes de", "después de", "despues de",
     "entre las", "a las",
     "tienes para", "hay para", "tenés para",
     "por la", "para la", "en la",
+    "ultima hora", "última hora",
+    "primer hora", "primera hora",
+    "a ultima", "a última",
+    "a primera",
 ]
 
-# Fecha/día → time_parser_node
 DATE_KEYWORDS = [
     "mañana", "manana", "hoy", "pasado",
     "otro día", "otro dia", "otra fecha",
     "siguiente", "próximo", "proximo",
-    "lunes", "martes", "miercoles", "miércoles", "jueves",
-    "viernes", "sabado", "sábado", "domingo",
+    "lunes", "martes",
+    "miercoles", "miércoles",
+    "jueve", "jueves",
+    "viernes",
+    "sabado", "sábado", "domingo",
+]
+
+SERVICE_CHANGE_KEYWORDS = [  # ← NUEVO
+    "cambiar de servicio", "cambiar servicio", "otro servicio",
+    "hacerme otra cosa", "otra cosa", "quiero otra cosa",
+    "quiero cambiar", "quiero otro", "diferente servicio",
+    "ver servicios", "ver el catalogo", "ver catálogo",
+    "el catalogo", "el catálogo",
 ]
 
 
@@ -31,13 +44,15 @@ def _is_valid_slot_selection(user_text: str, active_slots) -> bool:
 
 
 def _is_time_filter_query(user_text: str) -> bool:
-    """Detecta si el usuario pide una franja horaria específica."""
     return any(kw in user_text for kw in TIME_FILTER_KEYWORDS)
 
 
 def _is_date_query(user_text: str) -> bool:
-    """Detecta si el usuario pide una fecha o día diferente."""
     return any(kw in user_text for kw in DATE_KEYWORDS)
+
+
+def _is_service_change(user_text: str) -> bool:  # ← NUEVO
+    return any(kw in user_text for kw in SERVICE_CHANGE_KEYWORDS)
 
 
 def router_node(state: RoutingState) -> RoutingState:
@@ -51,7 +66,7 @@ def router_node(state: RoutingState) -> RoutingState:
     selected_service_id = state.get("selected_service_id")
     booking_confirmed = state.get("booking_confirmed", False)
 
-    # 1. Saludo o reinicio explícito → resetear TODO el contexto
+    # 1. Saludo o reinicio explícito
     if user_text in GREETINGS or user_text in {"hi", "hello"}:
         return {
             "intent": Intent.GREETING,
@@ -63,7 +78,11 @@ def router_node(state: RoutingState) -> RoutingState:
             "booking_confirmed": False,
         }
 
-    # 2. Cita confirmada → el usuario quiere algo más → catálogo
+    # 2. Esperando nombre
+    if state.get("wait_for_name"):
+        return {"intent": Intent.GREETING}
+
+    # 3. Cita confirmada → catálogo
     if booking_confirmed:
         return {
             "intent": Intent.CATALOG,
@@ -71,40 +90,55 @@ def router_node(state: RoutingState) -> RoutingState:
             "active_slots": [],
         }
 
+    # 4. Cambio de servicio explícito → catálogo, limpiar contexto  ← NUEVO
+    if _is_service_change(user_text):
+        return {
+            "intent": Intent.CATALOG,
+            "active_slots": [],
+            "selected_service_id": None,
+            "selected_date": None,
+            "time_filter": None,
+        }
+
     # ── Bloque: hay slots activos ─────────────────────────────────────────────
 
-    # 3. Hay slots + franja horaria → time_filter
-    #    Ej: "tienes para la tarde?", "antes de las 3"
+    # 5. Slots + fecha + franja → time_parser (maneja ambos)
+    if active_slots and _is_date_query(user_text) and _is_time_filter_query(user_text):
+        return {"intent": Intent.TIME_PARSER, "active_slots": []}
+
+    # 6. Slots + franja horaria sola → time_filter
     if active_slots and _is_time_filter_query(user_text):
         return {"intent": Intent.TIME_FILTER, "active_slots": []}
 
-    # 4. Hay slots + fecha/día → time_parser
-    #    Ej: "y mañana?", "el viernes", "otro día"
+    # 7. Slots + fecha/día sola → time_parser
     if active_slots and _is_date_query(user_text):
         return {"intent": Intent.TIME_PARSER, "active_slots": []}
 
-    # 5. Hay slots + número válido → confirmation
+    # 8. Slots + número válido → confirmation
     if active_slots and _is_valid_slot_selection(user_text, active_slots):
         return {"intent": Intent.CONFIRMATION}
 
-    # 6. Hay slots pero respuesta inválida → pedir de nuevo
+    # 9. Slots pero respuesta inválida → pedir de nuevo
     if active_slots:
         return {"intent": Intent.CONFIRMATION}
 
     # ── Bloque: sin slots pero hay servicio activo ────────────────────────────
-    # Ocurre cuando el turno anterior limpió slots (ej: tras "otro dia")
 
-    # 7. Sin slots + servicio + fecha/día → time_parser
+    # 10. Sin slots + servicio + fecha + franja → time_parser
+    if selected_service_id and _is_date_query(user_text) and _is_time_filter_query(user_text):
+        return {"intent": Intent.TIME_PARSER}
+
+    # 11. Sin slots + servicio + fecha sola → time_parser
     if selected_service_id and _is_date_query(user_text):
         return {"intent": Intent.TIME_PARSER}
 
-    # 8. Sin slots + servicio + franja horaria → time_filter
+    # 12. Sin slots + servicio + franja sola → time_filter
     if selected_service_id and _is_time_filter_query(user_text):
         return {"intent": Intent.TIME_FILTER}
 
-    # 9. Sin slots + servicio → booking (busca slots para la fecha actual)
+    # 13. Sin slots + servicio → booking
     if selected_service_id:
         return {"intent": Intent.BOOKING}
 
-    # 10. Default → catálogo
+    # 14. Default → catálogo
     return {"intent": Intent.CATALOG}
