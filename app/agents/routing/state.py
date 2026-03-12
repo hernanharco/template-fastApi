@@ -28,6 +28,7 @@ class RoutingState(TypedDict, total=False):
     # 4) Catalog memory
     shown_service_ids: List[int]
     selected_service_id: Optional[int]
+    service_candidates: List[Dict[str, Any]]  # ← NUEVO: candidatos ambiguos
 
     # 5) Temporal data
     selected_date: Optional[date]

@@ -10,6 +10,7 @@ from app.agents.nodes.catalog_node import catalog_node
 from app.agents.nodes.booking_node import booking_node
 from app.agents.nodes.confirmation_node import confirmation_node
 from app.agents.nodes.finish_node import finish_node
+from app.agents.nodes.farewell_node import farewell_node          # ← NUEVO
 from app.agents.nodes.time_parser_node import time_parser_node
 from app.agents.nodes.time_filter_node import time_filter_node
 from app.agents.nodes.favorite_fallback_node import favorite_fallback_node
@@ -28,6 +29,7 @@ workflow.add_node("catalog",           catalog_node)
 workflow.add_node("booking",           booking_node)
 workflow.add_node("confirmation",      confirmation_node)
 workflow.add_node("finish",            finish_node)
+workflow.add_node("farewell",          farewell_node)              # ← NUEVO
 workflow.add_node("time_parser",       time_parser_node)
 workflow.add_node("time_filter",       time_filter_node)
 workflow.add_node("favorite_fallback", favorite_fallback_node)
@@ -63,6 +65,7 @@ workflow.add_conditional_edges(
         "CONFIRMATION": "confirmation",
         "TIME_FILTER":  "time_filter",
         "TIME_PARSER":  "time_parser",
+        "FAREWELL":     "farewell",               # ← NUEVO
         "FINISH":       END,
     },
 )
@@ -96,12 +99,12 @@ workflow.add_conditional_edges(
     },
 )
 
-workflow.add_conditional_edges(          # ← único cambio respecto a tu versión
+workflow.add_conditional_edges(
     "favorite_fallback",
     _intent,
     {
-        "CONFIRMATION": END,   # muestra el mensaje y espera respuesta del usuario
-        "FINISH":       END,   # sin opciones disponibles
+        "CONFIRMATION": END,
+        "FINISH":       END,
     },
 )
 
@@ -117,6 +120,7 @@ workflow.add_conditional_edges(
 )
 
 workflow.add_edge("finish", END)
+workflow.add_edge("farewell", END)                                # ← NUEVO
 
 workflow.add_conditional_edges(
     "time_filter",

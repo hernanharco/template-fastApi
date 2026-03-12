@@ -1,5 +1,3 @@
-# app/services/service_selector.py
-
 import re
 import unicodedata
 from difflib import SequenceMatcher
@@ -11,29 +9,13 @@ from app.models.services import Service
 
 
 class ServiceSelector:
-    """
-    Resuelve el texto del usuario a un servicio activo.
-
-    Responsabilidad:
-    - Normalizar texto
-    - Buscar coincidencia exacta, parcial o aproximada
-    - Priorizar servicios mostrados previamente si aplica
-    """
 
     MIN_SIMILARITY_SCORE = 0.72
 
     @staticmethod
     def normalize_text(value: str) -> str:
-        """
-        Normaliza texto para comparar:
-        - minúsculas
-        - sin tildes
-        - sin símbolos extra
-        - espacios compactados
-        """
         if not value:
             return ""
-
         value = value.strip().lower()
         value = unicodedata.normalize("NFD", value)
         value = "".join(ch for ch in value if unicodedata.category(ch) != "Mn")
@@ -52,8 +34,6 @@ class ServiceSelector:
         shown_service_ids: Optional[List[int]] = None,
     ) -> List[Service]:
         query = db.query(Service).filter(Service.is_active == True)
-
-        # Si el catálogo reciente existe, intentamos priorizarlo
         if shown_service_ids:
             prioritized = (
                 query.filter(Service.id.in_(shown_service_ids))
@@ -62,7 +42,6 @@ class ServiceSelector:
             )
             if prioritized:
                 return prioritized
-
         return query.order_by(Service.name.asc()).all()
 
     @classmethod
@@ -72,37 +51,48 @@ class ServiceSelector:
         user_text: str,
         shown_service_ids: Optional[List[int]] = None,
     ) -> Optional[Service]:
+        """Devuelve UN solo servicio (comportamiento original)."""
+        results = cls.find_services_by_text(
+            db=db,
+            user_text=user_text,
+            shown_service_ids=shown_service_ids,
+        )
+        return results[0] if results else None
+
+    @classmethod
+    def find_services_by_text(
+        cls,
+        db: Session,
+        user_text: str,
+        shown_service_ids: Optional[List[int]] = None,
+    ) -> List[Service]:
         """
-        Busca el mejor match de servicio a partir del texto del usuario.
+        Devuelve TODOS los servicios que coincidan con el texto del usuario.
 
         Estrategia:
-        1. exact match normalizado
-        2. contains match
-        3. fuzzy match
+        1. Si hay match exacto → devolver solo ese
+        2. Si hay matches parciales → devolver todos ordenados por score
+        3. Si hay fuzzy match único sobre el umbral → devolver ese
         """
         normalized_input = cls.normalize_text(user_text)
         if not normalized_input:
-            return None
+            return []
 
-        services = cls._get_active_services(
-            db=db,
-            shown_service_ids=shown_service_ids,
-        )
-
+        services = cls._get_active_services(db=db, shown_service_ids=shown_service_ids)
         if not services:
-            return None
+            return []
 
-        normalized_services = []
-        for service in services:
-            normalized_name = cls.normalize_text(service.name)
-            normalized_services.append((service, normalized_name))
+        normalized_services = [
+            (service, cls.normalize_text(service.name))
+            for service in services
+        ]
 
-        # 1) Match exacto
+        # 1) Match exacto → resultado único
         for service, normalized_name in normalized_services:
             if normalized_input == normalized_name:
-                return service
+                return [service]
 
-        # 2) Match parcial
+        # 2) Matches parciales → devolver todos
         partial_matches = []
         for service, normalized_name in normalized_services:
             if normalized_input in normalized_name or normalized_name in normalized_input:
@@ -111,12 +101,11 @@ class ServiceSelector:
 
         if partial_matches:
             partial_matches.sort(key=lambda item: item[0], reverse=True)
-            return partial_matches[0][1]
+            return [service for _, service in partial_matches]
 
-        # 3) Fuzzy match
+        # 3) Fuzzy match → solo si supera el umbral
         best_score = 0.0
         best_service = None
-
         for service, normalized_name in normalized_services:
             score = cls.similarity(normalized_input, normalized_name)
             if score > best_score:
@@ -124,6 +113,6 @@ class ServiceSelector:
                 best_service = service
 
         if best_service and best_score >= cls.MIN_SIMILARITY_SCORE:
-            return best_service
+            return [best_service]
 
-        return None
+        return []
