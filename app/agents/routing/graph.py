@@ -10,7 +10,8 @@ from app.agents.nodes.catalog_node import catalog_node
 from app.agents.nodes.booking_node import booking_node
 from app.agents.nodes.confirmation_node import confirmation_node
 from app.agents.nodes.finish_node import finish_node
-from app.agents.nodes.farewell_node import farewell_node          # ← NUEVO
+from app.agents.nodes.farewell_node import farewell_node
+from app.agents.nodes.modification_request_node import modification_request_node  # ← NUEVO
 from app.agents.nodes.time_parser_node import time_parser_node
 from app.agents.nodes.time_filter_node import time_filter_node
 from app.agents.nodes.favorite_fallback_node import favorite_fallback_node
@@ -22,17 +23,18 @@ workflow = StateGraph(RoutingState)
 
 # ── Nodos ─────────────────────────────────────────────────────────────────────
 
-workflow.add_node("customer_lookup",   customer_lookup_node)
-workflow.add_node("router",            router_node)
-workflow.add_node("greeting",          greeting_node)
-workflow.add_node("catalog",           catalog_node)
-workflow.add_node("booking",           booking_node)
-workflow.add_node("confirmation",      confirmation_node)
-workflow.add_node("finish",            finish_node)
-workflow.add_node("farewell",          farewell_node)              # ← NUEVO
-workflow.add_node("time_parser",       time_parser_node)
-workflow.add_node("time_filter",       time_filter_node)
-workflow.add_node("favorite_fallback", favorite_fallback_node)
+workflow.add_node("customer_lookup",    customer_lookup_node)
+workflow.add_node("router",             router_node)
+workflow.add_node("greeting",           greeting_node)
+workflow.add_node("catalog",            catalog_node)
+workflow.add_node("booking",            booking_node)
+workflow.add_node("confirmation",       confirmation_node)
+workflow.add_node("finish",             finish_node)
+workflow.add_node("farewell",           farewell_node)
+workflow.add_node("modification_request", modification_request_node)              # ← NUEVO
+workflow.add_node("time_parser",        time_parser_node)
+workflow.add_node("time_filter",        time_filter_node)
+workflow.add_node("favorite_fallback",  favorite_fallback_node)
 
 
 # ── Helpers de routing ────────────────────────────────────────────────────────
@@ -59,14 +61,15 @@ workflow.add_conditional_edges(
     "router",
     _intent,
     {
-        "GREETING":     "greeting",
-        "CATALOG":      "catalog",
-        "BOOKING":      "booking",
-        "CONFIRMATION": "confirmation",
-        "TIME_FILTER":  "time_filter",
-        "TIME_PARSER":  "time_parser",
-        "FAREWELL":     "farewell",               # ← NUEVO
-        "FINISH":       END,
+        "GREETING":              "greeting",
+        "CATALOG":               "catalog",
+        "BOOKING":               "booking",
+        "CONFIRMATION":          "confirmation",
+        "TIME_FILTER":           "time_filter",
+        "TIME_PARSER":           "time_parser",
+        "FAREWELL":              "farewell",
+        "MODIFICATION_REQUEST":  "modification_request",                          # ← NUEVO
+        "FINISH":                END,
     },
 )
 
@@ -119,8 +122,9 @@ workflow.add_conditional_edges(
     },
 )
 
-workflow.add_edge("finish", END)
-workflow.add_edge("farewell", END)                                # ← NUEVO
+workflow.add_edge("finish",               END)
+workflow.add_edge("farewell",             END)
+workflow.add_edge("modification_request", END)                                    # ← NUEVO
 
 workflow.add_conditional_edges(
     "time_filter",

@@ -4,13 +4,21 @@ from app.agents.routing.state import RoutingState
 
 GREETINGS = {"hola", "buenas", "buenos dias", "buenas tardes", "menu", "inicio", "reiniciar"}
 
-FAREWELL_KEYWORDS = {                                              # ← NUEVO
+FAREWELL_KEYWORDS = {
     "gracias", "muchas gracias", "ok gracias", "listo gracias",
     "hasta luego", "hasta pronto", "nos vemos", "chao", "chau",
     "bye", "adios", "adiós", "hasta mañana", "hasta manana",
     "perfecto gracias", "de acuerdo gracias", "genial gracias",
     "todo bien gracias", "excelente gracias", "listo muchas gracias",
 }
+
+MODIFICATION_KEYWORDS = [                                          # ← NUEVO
+    "cancelar", "cancel", "cancelar cita", "anular",
+    "modificar", "cambiar cita", "cambiar mi cita",
+    "reprogramar", "mover la cita", "mover mi cita",
+    "eliminar cita", "borrar cita", "quiero cancelar",
+    "quiero modificar", "quiero cambiar mi cita",
+]
 
 TIME_FILTER_KEYWORDS = [
     "tarde", "noche", "temprano",
@@ -70,8 +78,12 @@ def _is_service_change(user_text: str) -> bool:
     return any(kw in user_text for kw in SERVICE_CHANGE_KEYWORDS)
 
 
-def _is_farewell(user_text: str) -> bool:                         # ← NUEVO
+def _is_farewell(user_text: str) -> bool:
     return user_text in FAREWELL_KEYWORDS or any(kw in user_text for kw in FAREWELL_KEYWORDS)
+
+
+def _is_modification(user_text: str) -> bool:                     # ← NUEVO
+    return any(kw in user_text for kw in MODIFICATION_KEYWORDS)
 
 
 def router_node(state: RoutingState) -> RoutingState:
@@ -99,7 +111,7 @@ def router_node(state: RoutingState) -> RoutingState:
             "booking_confirmed": False,
         }
 
-    # 2. Despedida                                                 # ← NUEVO
+    # 2. Despedida
     if _is_farewell(user_text):
         return {
             "intent": Intent.FAREWELL,
@@ -107,11 +119,19 @@ def router_node(state: RoutingState) -> RoutingState:
             "service_candidates": [],
         }
 
-    # 3. Esperando nombre
+    # 3. Modificación o cancelación → derivar al establecimiento  # ← NUEVO
+    if _is_modification(user_text):
+        return {
+            "intent": Intent.MODIFICATION_REQUEST,
+            "active_slots": [],
+            "service_candidates": [],
+        }
+
+    # 4. Esperando nombre
     if state.get("wait_for_name"):
         return {"intent": Intent.GREETING}
 
-    # 4. Cita confirmada → catálogo
+    # 5. Cita confirmada → catálogo
     if booking_confirmed:
         return {
             "intent": Intent.CATALOG,
@@ -120,7 +140,7 @@ def router_node(state: RoutingState) -> RoutingState:
             "service_candidates": [],
         }
 
-    # 5. Cambio de servicio explícito → catálogo, limpiar contexto
+    # 6. Cambio de servicio explícito → catálogo, limpiar contexto
     if _is_service_change(user_text):
         return {
             "intent": Intent.CATALOG,
@@ -131,53 +151,53 @@ def router_node(state: RoutingState) -> RoutingState:
             "service_candidates": [],
         }
 
-    # 6. Candidatos activos + número válido → catálogo resuelve la elección
+    # 7. Candidatos activos + número válido → catálogo resuelve la elección
     if service_candidates and _is_valid_candidate_selection(user_text, service_candidates):
         return {"intent": Intent.CATALOG}
 
-    # 7. Candidatos activos pero respuesta inválida → repetir opciones
+    # 8. Candidatos activos pero respuesta inválida → repetir opciones
     if service_candidates:
         return {"intent": Intent.CATALOG}
 
     # ── Bloque: hay slots activos ─────────────────────────────────────────────
 
-    # 8. Slots + fecha + franja → time_parser
+    # 9. Slots + fecha + franja → time_parser
     if active_slots and _is_date_query(user_text) and _is_time_filter_query(user_text):
         return {"intent": Intent.TIME_PARSER, "active_slots": []}
 
-    # 9. Slots + franja horaria sola → time_filter
+    # 10. Slots + franja horaria sola → time_filter
     if active_slots and _is_time_filter_query(user_text):
         return {"intent": Intent.TIME_FILTER, "active_slots": []}
 
-    # 10. Slots + fecha/día sola → time_parser
+    # 11. Slots + fecha/día sola → time_parser
     if active_slots and _is_date_query(user_text):
         return {"intent": Intent.TIME_PARSER, "active_slots": []}
 
-    # 11. Slots + número válido → confirmation
+    # 12. Slots + número válido → confirmation
     if active_slots and _is_valid_slot_selection(user_text, active_slots):
         return {"intent": Intent.CONFIRMATION}
 
-    # 12. Slots pero respuesta inválida → pedir de nuevo
+    # 13. Slots pero respuesta inválida → pedir de nuevo
     if active_slots:
         return {"intent": Intent.CONFIRMATION}
 
     # ── Bloque: sin slots pero hay servicio activo ────────────────────────────
 
-    # 13. Sin slots + servicio + fecha + franja → time_parser
+    # 14. Sin slots + servicio + fecha + franja → time_parser
     if selected_service_id and _is_date_query(user_text) and _is_time_filter_query(user_text):
         return {"intent": Intent.TIME_PARSER}
 
-    # 14. Sin slots + servicio + fecha sola → time_parser
+    # 15. Sin slots + servicio + fecha sola → time_parser
     if selected_service_id and _is_date_query(user_text):
         return {"intent": Intent.TIME_PARSER}
 
-    # 15. Sin slots + servicio + franja sola → time_filter
+    # 16. Sin slots + servicio + franja sola → time_filter
     if selected_service_id and _is_time_filter_query(user_text):
         return {"intent": Intent.TIME_FILTER}
 
-    # 16. Sin slots + servicio → booking
+    # 17. Sin slots + servicio → booking
     if selected_service_id:
         return {"intent": Intent.BOOKING}
 
-    # 17. Default → catálogo
+    # 18. Default → catálogo
     return {"intent": Intent.CATALOG}
